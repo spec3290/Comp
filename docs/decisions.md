@@ -47,6 +47,8 @@
   - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
+    - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`. 자격 파라미터(`education` 등)와 `eligibility_check_needed`는 F3-1·F3-3에서 추가.
+  - 대회 응답 필드: `id`, `title`, `host`, `field`, `status`(`open`/`upcoming`/`closed`, 조회 시 계산), `d_day`(마감 당일 0), `apply_start`, `apply_end`, `event_start`, `event_end`(날짜 `YYYY-MM-DD`, 없으면 null), `apply_url`, `source_url`. 상세는 `eligibility_text`, `sources`(수집 출처 목록)를 더한다.
 - **엔드포인트 초안**:
 
 | 기능 | 메서드·경로 | 인증 |
@@ -81,7 +83,7 @@
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`가 없는 테이블은 PostgreSQL이다(ADR-0008). 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`가 없는 테이블은 PostgreSQL이다(ADR-0008). 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -107,13 +109,13 @@
 |---|---|---|---|---|
 | Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | dev-event.vercel.app, dacon.io, linkareer.com (사용자 지정). 세 곳 모두 robots.txt가 목록 경로를 허용(2026-10-23 확인). 소스별 어댑터 + 링커리어 페이지 간 1초 지연. 이용약관은 미확인 | 결정됨 |
 | Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로. 구현은 이 기본값 + 맨 앞 `[...]` 접두어 제거로 동작 중 | 열림 |
-| Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 조회 가능 (기본 목록에서만 제외) | 열림 |
+| Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 기본 목록에서 제외하고 `status=closed`로 조회 가능. 접수 마감 3일이 지나면(마감일 < 오늘-3일) 수집 실행 때 하드 삭제한다 | 결정됨 |
 | Q-4 | Access/Refresh 만료 시간과 Access 블랙리스트 저장소(DB vs Redis)는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일, MVP는 DB 테이블 | 열림 |
 | Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 2~12자, 중복 불가. 학교 유형: 중/고/대학교/기타 | 열림 |
-| Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 시작일 없으면 등록 즉시 '접수 중'으로 간주 | 열림 |
+| Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 소스에 값이 있으면 크롤링한다(DACON은 일정 HTML의 '참가(신청) 기간', 없으면 대회 기간). 그래도 시작일이 없으면 '접수 중'으로 간주 | 결정됨 |
 | Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 로컬 삭제는 진행, revoke 실패는 로그 + 재시도 큐는 2차 | 열림 |
 | Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 사용자가 초안 제공, 에이전트가 설정 파일로 구성 | 열림 |
-| Q-9 | 한 대회에 여러 태그가 걸릴 때(예: 고등학생+대학생) 필터 매칭은 OR인가 AND인가? | F3-3 (ADR-0004) | 차원 안에서 OR, 차원 사이는 AND | 열림 |
+| Q-9 | 한 대회에 여러 태그가 걸릴 때(예: 고등학생+대학생) 필터 매칭은 OR인가 AND인가? | F2-3, F3-3 (ADR-0004) | 같은 파라미터 안은 OR, 파라미터 사이는 AND | 결정됨 |
 | Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
 | Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
 | Q-12 | PDF의 '기능 삭제' 커밋 타입 이모지는 이미지상 관(⚰️)으로 보이는데 맞나? | git-workflow 스킬 | ⚰️ 로 가정 | 열림 |
