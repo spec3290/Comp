@@ -1,0 +1,48 @@
+name: ci
+
+# 이 프로젝트의 검증은 전부 여기서 한다 (docs/decisions.md ADR-0006).
+# 머지 조건: 이 워크플로 성공 + 최소 1명의 approve (브랜치 보호 규칙에서 필수 체크로 지정할 것).
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint / type / architecture / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: 포맷
+        run: uv run ruff format --check .
+      - name: 린트
+        run: uv run ruff check .
+      - name: 타입 (mypy strict)
+        run: uv run mypy
+      - name: 아키텍처 제약 (import-linter, AC-1~AC-3)
+        run: uv run lint-imports
+      - name: 테스트
+        run: uv run pytest --cov=app --cov-report=term-missing:skip-covered
+
+  conventions:
+    name: git conventions
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 커밋 메시지 · 브랜치명 · PR 제목
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python scripts/check_conventions.py --base "origin/$BASE_REF" --head-ref "$HEAD_REF" --title "$PR_TITLE"

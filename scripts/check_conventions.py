@@ -64,6 +64,7 @@ def commit_subjects(base: str) -> list[str]:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # Windows 기본 인코딩(cp949)으로는 이모지 제목을 못 읽는다
     ).stdout
     return [line for line in out.splitlines() if line.strip()]
 
