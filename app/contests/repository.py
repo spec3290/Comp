@@ -3,6 +3,9 @@
 문서 하나가 병합된 대회 하나다. 날짜는 KST 자정 tz-aware datetime 으로 저장한다
 (BSON 에 날짜 전용 타입이 없다). 수집 출처는 `sources` 배열에 쌓고, 처음 수집한 소스가
 대표(`source`)가 되어 값을 갱신한다 (Q-2 기본값).
+
+동시에 여러 수집이 같은 대회를 저장해도 문서·출처가 겹치지 않게, 갱신은 '확인 후 쓰기'
+대신 조건을 건 단일 연산과 merge_key UNIQUE 인덱스에 맡긴다.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from typing import Any
 
 from pymongo import ASCENDING
 from pymongo.database import Database
+from pymongo.errors import DuplicateKeyError
 
 from app.contests.crawlers.base import RawContest
 from app.core.db import Document
@@ -58,21 +62,7 @@ class ContestRepository:
         """merge_key 기준 upsert. 같은 입력을 여러 번 저장해도 문서는 하나다 (F2-2 멱등)."""
         fields = _fields(contest)
         origin = {"source": contest.source, "source_url": contest.source_url, "fetched_at": now}
-        inserted = self._contests.update_one(
-            {"merge_key": merge_key},
-            {
-                "$setOnInsert": {
-                    **fields,
-                    "merge_key": merge_key,
-                    "source": contest.source,
-                    "sources": [origin],
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            },
-            upsert=True,
-        )
-        if inserted.upserted_id is not None:
+        if self._insert_if_absent(merge_key, fields, origin, now):
             return SaveOutcome.INSERTED
 
         representative = self._contests.update_one(
@@ -82,8 +72,44 @@ class ContestRepository:
         self._upsert_origin(merge_key, origin)
         return SaveOutcome.UPDATED if representative.matched_count else SaveOutcome.MERGED
 
+    def _insert_if_absent(
+        self, merge_key: str, fields: dict[str, Any], origin: dict[str, Any], now: datetime
+    ) -> bool:
+        """없으면 새 문서를 만들고 True. 이미 있거나 동시에 다른 작업이 먼저 만들었으면 False."""
+        try:
+            result = self._contests.update_one(
+                {"merge_key": merge_key},
+                {
+                    "$setOnInsert": {
+                        **fields,
+                        "merge_key": merge_key,
+                        "source": origin["source"],
+                        "sources": [origin],
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                },
+                upsert=True,
+            )
+        except DuplicateKeyError:
+            # 같은 merge_key 를 동시에 upsert 하면 한쪽이 UNIQUE 인덱스에 걸린다.
+            # 먼저 만든 쪽을 따르고 이후 갱신·병합 단계로 넘어간다.
+            return False
+        return result.upserted_id is not None
+
     def _upsert_origin(self, merge_key: str, origin: dict[str, Any]) -> None:
-        refreshed = self._contests.update_one(
+        """출처를 추가하거나 갱신한다.
+
+        '없으면 추가'를 `sources.source $ne` 조건을 건 단일 $push 로 해서, 동시에 불려도 같은
+        소스가 두 번 들어가지 않는다. 이미 있으면 그 항목만 갱신한다.
+        """
+        pushed = self._contests.update_one(
+            {"merge_key": merge_key, "sources.source": {"$ne": origin["source"]}},
+            {"$push": {"sources": origin}},
+        )
+        if pushed.matched_count:
+            return
+        self._contests.update_one(
             {"merge_key": merge_key, "sources.source": origin["source"]},
             {
                 "$set": {
@@ -92,5 +118,3 @@ class ContestRepository:
                 }
             },
         )
-        if refreshed.matched_count == 0:
-            self._contests.update_one({"merge_key": merge_key}, {"$push": {"sources": origin}})

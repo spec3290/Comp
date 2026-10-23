@@ -1,8 +1,10 @@
 """실제 MongoDB 통합 테스트. MONGODB_TEST_URI 가 있을 때만 돈다 (임시 DB 를 만들고 지운다)."""
 
 import os
+import threading
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import pytest
@@ -68,3 +70,25 @@ def test_save_is_idempotent_and_merges_sources(db: Database[Document]) -> None:
     assert [s["source"] for s in doc["sources"]] == ["a", "b"]
     assert doc["apply_end"].date() == date(2026, 11, 1)
     assert doc["apply_end"].utcoffset() == now_kst().utcoffset()
+
+
+@pytest.mark.feature("F2-2")
+def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Document]) -> None:
+    repo = ContestRepository(db)
+    repo.ensure_indexes()
+    key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
+    contests = [_contest(source) for source in ("a", "b", "c") for _ in range(8)]
+    barrier = threading.Barrier(len(contests))
+
+    def save(contest: RawContest) -> SaveOutcome:
+        barrier.wait()  # 최대한 동시에 출발시킨다
+        return repo.save(contest, key, now_kst())
+
+    with ThreadPoolExecutor(max_workers=len(contests)) as pool:
+        outcomes = list(pool.map(save, contests))
+
+    docs = list(db[COLLECTION].find())
+    assert len(docs) == 1
+    sources = [s["source"] for s in docs[0]["sources"]]
+    assert sorted(sources) == ["a", "b", "c"]
+    assert outcomes.count(SaveOutcome.INSERTED) == 1
