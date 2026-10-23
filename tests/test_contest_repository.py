@@ -176,3 +176,24 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Docu
     sources = [s["source"] for s in docs[0]["sources"]]
     assert sorted(sources) == ["a", "b", "c"]
     assert outcomes.count(SaveOutcome.INSERTED) == 1
+
+
+@pytest.mark.feature("F2-2")
+def test_concurrent_saves_with_changed_deadline_keep_one_document(db: Database[Document]) -> None:
+    repo = ContestRepository(db)
+    repo.ensure_indexes()
+    _save(repo, _contest("dacon", apply_end=date(2026, 11, 2)))
+    changed = [_contest("dacon", apply_end=date(2026, 11, 1)) for _ in range(16)]
+    barrier = threading.Barrier(len(changed))
+
+    def save(contest: RawContest) -> SaveOutcome:
+        barrier.wait()
+        return _save(repo, contest)
+
+    with ThreadPoolExecutor(max_workers=len(changed)) as pool:
+        outcomes = list(pool.map(save, changed))
+
+    docs = list(db[COLLECTION].find())
+    assert len(docs) == 1
+    assert docs[0]["apply_end"].date() == date(2026, 11, 1)
+    assert SaveOutcome.INSERTED not in outcomes

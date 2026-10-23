@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from enum import StrEnum
@@ -158,18 +159,18 @@ class ContestRepository:
         """대표 소스가 마감일·제목을 바꿔 merge_key 가 달라지면 기존 문서의 키를 옮긴다.
 
         같은 원문 URL(source + source_url)을 같은 대회로 본다. 새 키의 문서가 이미 있으면
-        (다른 소스와 병합된 경우) 옮기지 않는다.
+        (다른 소스와 병합됐거나 동시에 다른 작업이 만든 경우) UNIQUE 인덱스가 막으므로
+        옮기지 않는다. 미리 확인하지 않고 시도해서 확인과 갱신 사이의 경합을 없앤다.
         """
-        if self._contests.count_documents({"merge_key": merge_key}, limit=1):
-            return
-        self._contests.update_one(
-            {
-                "source": contest.source,
-                "source_url": contest.source_url,
-                "merge_key": {"$ne": merge_key},
-            },
-            {"$set": {"merge_key": merge_key}},
-        )
+        with suppress(DuplicateKeyError):
+            self._contests.update_one(
+                {
+                    "source": contest.source,
+                    "source_url": contest.source_url,
+                    "merge_key": {"$ne": merge_key},
+                },
+                {"$set": {"merge_key": merge_key}},
+            )
 
     def _insert_if_absent(
         self, merge_key: str, fields: dict[str, Any], origin: dict[str, Any], now: datetime
