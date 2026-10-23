@@ -20,6 +20,7 @@
 | ADR-0005 | 데이터 모델 원칙과 초안 | 제안 | 전체 |
 | ADR-0006 | 검증은 GitHub Actions CI로 일원화 | 채택 | 전체 |
 | ADR-0007 | 기능별 패키지 + 얇은 3계층으로 단순화 | 채택 | 전체 |
+| ADR-0008 | PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소 | 채택 | 전체 (ADR-0005) |
 
 ### ADR-0001 레이어드 아키텍처와 import-linter (대체됨 → ADR-0007)
 - **배경**: 에이전트가 빠르게 코드를 만들수록 구조가 흐트러진다. 문서만으로는 레이어 규칙이 지켜지지 않는다.
@@ -72,15 +73,15 @@
 | user_interest_fields | user_id, field |
 | refresh_tokens | id, user_id, jti, family_id, expires_at, rotated_at, revoked_at |
 | access_token_blacklist | jti, expires_at (만료 후 정리) |
-| contests | id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, created_at, updated_at |
-| contest_sources | contest_id, source, source_url, fetched_at (병합 근거) |
-| contest_tags | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
+| contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
+| contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
+| contest_tags (MongoDB) | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
 | qualification_rules | id, dimension, keyword, value, enabled |
 | contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MVP에서 `ILIKE`. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`가 없는 테이블은 PostgreSQL이다(ADR-0008). 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -94,12 +95,18 @@
 - **대안**: ADR-0001 유지(구조 강제는 강하지만 MVP 속도가 느림), 계약 없이 문서로만 관리(위반이 누적됨).
 - **결과**: 기능 코드가 한 폴더에 모여 찾기·수정이 쉽다. 서비스가 SQLAlchemy 등을 직접 알 수 있어 테스트는 DB 픽스처에 더 기댄다. 규모가 커지면 ports·계약을 다시 늘리는 ADR을 쓴다.
 
+### ADR-0008 PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소
+- **배경**: 크롤링한 대회 데이터는 소스마다 형태가 달라 스키마가 자주 바뀌고, 이후 대회 임베딩을 저장·검색할 벡터 저장소가 필요하다. 사용자·토큰 등은 관계형 제약(UNIQUE, 트랜잭션)이 중요하다.
+- **결정**: PostgreSQL(SQLAlchemy + Alembic)을 메인 DB로 두고 users, refresh_tokens, access_token_blacklist, bookmarks, contest_clicks, crawl_runs, qualification_rules 등을 저장한다. MongoDB(pymongo)에는 대회 데이터(contests, contest_sources, contest_tags)와 벡터(임베딩)를 저장한다. 연결은 `app/core/db.py`(MongoDB)에 두고, 컬렉션 접근은 각 기능의 `repository`에서만 한다.
+- **대안**: PostgreSQL 단일(+pgvector, 저장소 하나로 단순하지만 사용자가 MongoDB를 선택), MongoDB 단일(인증·토큰 회전의 관계형 제약을 직접 구현해야 함).
+- **결과**: 대회 스키마 변경에 마이그레이션이 필요 없고 벡터를 대회 문서 옆에 둘 수 있다. 두 DB 사이에는 FK·트랜잭션이 없어서 bookmarks·contest_clicks의 `contest_id`는 MongoDB `_id` 문자열을 참조만 하고, 대회 삭제·병합 시 정합성은 서비스 코드가 맞춘다.
+
 ## 결정이 필요한 항목
 
 | ID | 질문 | 영향 기능 | 제안(기본값) | 상태 |
 |---|---|---|---|---|
-| Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | 사용자가 소스를 지정. 소스별 어댑터 + 요청 간 지연 | 열림 |
-| Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로 | 열림 |
+| Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | dev-event.vercel.app, dacon.io, linkareer.com (사용자 지정). 세 곳 모두 robots.txt가 목록 경로를 허용(2026-10-23 확인). 소스별 어댑터 + 링커리어 페이지 간 1초 지연. 이용약관은 미확인 | 결정됨 |
+| Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로. 구현은 이 기본값 + 맨 앞 `[...]` 접두어 제거로 동작 중 | 열림 |
 | Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 조회 가능 (기본 목록에서만 제외) | 열림 |
 | Q-4 | Access/Refresh 만료 시간과 Access 블랙리스트 저장소(DB vs Redis)는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일, MVP는 DB 테이블 | 열림 |
 | Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 2~12자, 중복 불가. 학교 유형: 중/고/대학교/기타 | 열림 |
@@ -110,3 +117,6 @@
 | Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
 | Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
 | Q-12 | PDF의 '기능 삭제' 커밋 타입 이모지는 이미지상 관(⚰️)으로 보이는데 맞나? | git-workflow 스킬 | ⚰️ 로 가정 | 열림 |
+| Q-13 | 저장소를 MongoDB(pymongo)로 바꾸나, PostgreSQL(SQLAlchemy)과 함께 쓰나? AGENTS.md 스택·ADR-0005는 PostgreSQL+Alembic 기준이다 | 전체 (ADR-0005) | PostgreSQL 메인 + MongoDB(대회 데이터·벡터) → ADR-0008 | 결정됨 |
+| Q-14 | Dev Event에서 접수 기간 없이 행사 당일 일정(`DATE`)만 있는 대회의 접수 마감일은? | F2-1, F2-3 | 행사 시작일을 접수 마감일로 간주 | 결정됨 |
+| Q-15 | 링커리어 공모전은 분야 제한 없이(네이밍·사진·UCC 등 포함) 모두 수집하나, 개발·AI·보안·디자인·아이디어 등 특정 카테고리만 수집하나? | F2-1, F3-1 | 과학/공학(35)·기획/아이디어(28) 카테고리만 수집. 링커리어에 IT/소프트웨어 카테고리가 따로 없어 개발 대회는 주로 이 둘에 있음. 창업·학술·디자인·게임 등은 제외 | 결정됨 |
