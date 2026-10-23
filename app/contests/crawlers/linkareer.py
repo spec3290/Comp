@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import date, datetime
 from typing import Any
@@ -10,6 +11,8 @@ import httpx
 
 from app.contests.crawlers.base import RawContest, convert_each
 from app.core.time import KST
+
+logger = logging.getLogger(__name__)
 
 NAME = "linkareer"
 URL = "https://api.linkareer.com/graphql"
@@ -26,7 +29,7 @@ query Contests($page: Int!, $size: Int!) {
   ) {
     totalCount
     nodes {
-      id title organizationName recruitStartAt recruitCloseAt homepageURL
+      id title organizationName recruitStartAt recruitCloseAt
       categories { name } targets { name } regions { name }
     }
   }
@@ -49,6 +52,10 @@ class LinkareerSource:
             if not page_nodes or len(nodes) >= total:
                 break
             time.sleep(self._delay)
+        else:
+            logger.warning(
+                "linkareer: 최대 %d페이지에서 중단 (%d/%d건)", MAX_PAGES, len(nodes), total
+            )
         return convert_each(nodes, _to_contest, NAME)
 
     def _fetch_page(self, page: int) -> tuple[int, list[dict[str, Any]]]:
@@ -94,7 +101,8 @@ def _to_contest(node: dict[str, Any]) -> RawContest | None:
         event_start=None,
         event_end=None,
         eligibility_text=_eligibility(node),
-        apply_url=node.get("homepageURL") or detail_url,
+        # homepageURL 은 대회 페이지가 아니라 주최 기관 홈페이지인 경우가 많아 상세 페이지로 보낸다
+        apply_url=detail_url,
         source=NAME,
         source_url=detail_url,
     )

@@ -42,6 +42,7 @@ def test_dev_event_keeps_only_contests_and_maps_recruit_period() -> None:
             _dev_event(id=2, tags=[{"tag_name": "세미나"}]),
             _dev_event(id=3, event_time_type="DATE", start_date_time="2026-11-01T10:00"),
             {"id": 4, "broken": True},
+            _dev_event(id=5, organizer=None),
         ]
     )
     contests = DevEventSource(_client(lambda _: httpx.Response(200, text=page))).fetch()
@@ -87,6 +88,7 @@ def test_dacon_maps_public_competitions() -> None:
     contest = contests[0]
     assert contest.host == "데이콘"
     assert contest.field == "알고리즘, 코드 제출 평가"
+    assert contest.apply_start is None
     assert contest.apply_end == date(2026, 11, 2)
     assert contest.source_url.endswith("/236771/overview/description")
 
@@ -98,7 +100,7 @@ def _linkareer_node(node_id: str) -> dict[str, Any]:
         "organizationName": "과학기술정보통신부",
         "recruitStartAt": 1791385200000,  # 2026-10-08 00:00 KST
         "recruitCloseAt": 1794149999999,  # 2026-11-08 23:59:59 KST
-        "homepageURL": None,
+        "homepageURL": "https://www.msit.go.kr",
         "categories": [{"name": "기획/아이디어"}],
         "targets": [{"name": "대학생"}],
         "regions": [{"name": "서울"}],

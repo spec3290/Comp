@@ -57,7 +57,7 @@ def convert_each(
     for item in items:
         try:
             contest = convert(item)
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
             logger.warning("%s: 형식이 다른 항목을 건너뜀 (id=%s)", source, item.get("id"))
             continue
         if contest is not None:

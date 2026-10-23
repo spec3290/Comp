@@ -44,8 +44,10 @@ def _to_contest(item: dict[str, Any]) -> RawContest | None:
         title=item["name"].strip(),
         host=(item.get("sponsor") or DEFAULT_HOST).strip(),
         field=", ".join(k.strip() for k in keywords if k.strip()),
-        # DACON 은 대회 기간 중 언제든 참가할 수 있어 대회 기간을 접수 기간으로 쓴다
-        apply_start=date.fromisoformat(item["period_start"][:10]),
+        # period_start 는 대회 시작일이라 실제 참가 신청 시작보다 늦을 수 있다. 정확한 값은
+        # 상세 일정 HTML 에만 있어 비워 두고 Q-6 기본값(시작일 없으면 접수 중)을 따른다.
+        # 대회 종료(period_end)까지 참가할 수 있어 이를 접수 마감으로 쓴다.
+        apply_start=None,
         apply_end=date.fromisoformat(item["period_end"][:10]),
         event_start=None,
         event_end=None,
