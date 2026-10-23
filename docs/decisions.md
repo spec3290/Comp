@@ -73,8 +73,8 @@
 | user_interest_fields | user_id, field |
 | refresh_tokens | id, user_id, jti, family_id, expires_at, rotated_at, revoked_at |
 | access_token_blacklist | jti, expires_at (만료 후 정리) |
-| contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, created_at, updated_at |
-| contest_sources (MongoDB) | contest_id, source, source_url, fetched_at (병합 근거) |
+| contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
+| contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
 | contest_tags (MongoDB) | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
 | qualification_rules | id, dimension, keyword, value, enabled |
 | contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
@@ -105,8 +105,8 @@
 
 | ID | 질문 | 영향 기능 | 제안(기본값) | 상태 |
 |---|---|---|---|---|
-| Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | 사용자가 소스를 지정. 소스별 어댑터 + 요청 간 지연 | 열림 |
-| Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로 | 열림 |
+| Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | dev-event.vercel.app, dacon.io, linkareer.com (사용자 지정). 세 곳 모두 robots.txt가 목록 경로를 허용(2026-10-23 확인). 소스별 어댑터 + 링커리어 페이지 간 1초 지연. 이용약관은 미확인 | 결정됨 |
+| Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로. 구현은 이 기본값 + 맨 앞 `[...]` 접두어 제거로 동작 중 | 열림 |
 | Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 조회 가능 (기본 목록에서만 제외) | 열림 |
 | Q-4 | Access/Refresh 만료 시간과 Access 블랙리스트 저장소(DB vs Redis)는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일, MVP는 DB 테이블 | 열림 |
 | Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 2~12자, 중복 불가. 학교 유형: 중/고/대학교/기타 | 열림 |
@@ -118,3 +118,5 @@
 | Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
 | Q-12 | PDF의 '기능 삭제' 커밋 타입 이모지는 이미지상 관(⚰️)으로 보이는데 맞나? | git-workflow 스킬 | ⚰️ 로 가정 | 열림 |
 | Q-13 | 저장소를 MongoDB(pymongo)로 바꾸나, PostgreSQL(SQLAlchemy)과 함께 쓰나? AGENTS.md 스택·ADR-0005는 PostgreSQL+Alembic 기준이다 | 전체 (ADR-0005) | PostgreSQL 메인 + MongoDB(대회 데이터·벡터) → ADR-0008 | 결정됨 |
+| Q-14 | Dev Event에서 접수 기간 없이 행사 당일 일정(`DATE`)만 있는 대회의 접수 마감일은? | F2-1, F2-3 | 행사 시작일을 접수 마감일로 간주 (구현 기본값) | 열림 |
+| Q-15 | 링커리어 공모전은 분야 제한 없이(네이밍·사진·UCC 등 포함) 모두 수집하나, 개발·AI·보안·디자인·아이디어 등 특정 카테고리만 수집하나? | F2-1, F3-1 | 모집 중인 공모전 전체 수집 (구현 기본값) | 열림 |
