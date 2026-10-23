@@ -10,7 +10,6 @@ dependencies = [
     "alembic>=1.13",
     "pyjwt>=2.8",
     "httpx>=0.27",
-    "pymongo>=4.19.0",
 ]
 
 [dependency-groups]
@@ -24,8 +23,8 @@ dev = [
 ]
 
 # ──────────────────────────────────────────────────────────────
-# 아키텍처 제약 (사람이 읽는 설명: docs/architecture/constraints.md)
-# 이 섹션을 약화하려면 먼저 docs/architecture/decisions.md 에 ADR을 추가한다.
+# 아키텍처 제약 (설명: AGENTS.md '아키텍처 제약', 근거: docs/decisions.md ADR-0001)
+# 이 섹션을 약화하려면 먼저 docs/decisions.md 에 ADR을 추가한다.
 # ──────────────────────────────────────────────────────────────
 [tool.importlinter]
 root_package = "app"
@@ -124,7 +123,7 @@ ignore = ["S101"]  # pytest 의 assert 허용
 max-complexity = 10
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"requests".msg = "HTTP 클라이언트는 httpx만 사용한다 (docs/engineering/conventions.md)."
+"requests".msg = "HTTP 클라이언트는 httpx만 사용한다 (AGENTS.md)."
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*" = ["T20"]
@@ -139,5 +138,5 @@ files = ["app", "tests", "scripts"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
-    "feature(id): 이 테스트가 검증하는 기능 ID (예: F2-2). docs/product/features.md 참고",
+    "feature(id): 이 테스트가 검증하는 기능 ID (예: F2-2). docs/features.md 참고",
 ]

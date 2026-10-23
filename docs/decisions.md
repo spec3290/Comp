@@ -1,0 +1,105 @@
+# 결정 내역
+
+확정된 결정(ADR)과 아직 결정이 필요한 항목을 이 파일 하나에서 관리한다. 이전의 `decisions/` 폴더, `open-questions.md`, 아키텍처·데이터 모델·API 규약 문서는 내용을 줄여 여기로 통합했다.
+
+## 운영 규칙
+
+- 새 결정은 `ADR-NNNN` 번호를 이어서 붙여 `결정 목록`에 추가한다. 항목은 `배경` / `결정` / `대안` / `결과` 네 줄이면 충분하다.
+- 상태는 `제안` → `채택` → (`폐기` / `대체됨`). 채택된 결정을 뒤집을 때는 지우지 않고 상태를 바꾸고 새 번호로 이유를 쓴다.
+- 구조 제약(AGENTS.md의 AC 규칙)을 완화하는 결정은 사용자 승인을 받은 뒤 `pyproject.toml`과 AGENTS.md를 **같은 변경**에서 고친다.
+- 명세가 비어 있어 추측이 필요하면 구현하지 말고 `결정이 필요한 항목` 표에 Q-번호로 추가하고 사용자에게 묻는다. 결정되면 ADR이나 features.md에 반영하고 상태를 `결정됨`으로 바꾼다.
+
+## 결정 목록
+
+| ID | 제목 | 상태 | 관련 기능 |
+|---|---|---|---|
+| ADR-0001 | 레이어드 아키텍처와 import-linter | 채택 | 전체 |
+| ADR-0002 | JWT와 Refresh Token 회전 | 제안 (Q-4 대기) | F1-4, F1-5 |
+| ADR-0003 | 소셜 로그인만 지원 | 채택 | F1-6, F1-8 |
+| ADR-0004 | API 규약 (에러·인증·페이지네이션) | 채택 | 전체 |
+| ADR-0005 | 데이터 모델 원칙과 초안 | 제안 | 전체 |
+| ADR-0006 | 검증은 GitHub Actions CI로 일원화 | 채택 | 전체 |
+
+### ADR-0001 레이어드 아키텍처와 import-linter
+- **배경**: 에이전트가 빠르게 코드를 만들수록 구조가 흐트러진다. 문서만으로는 레이어 규칙이 지켜지지 않는다.
+- **결정**: `api/jobs → services → repositories → domain`, 외부 시스템은 `domain/ports.py`의 Protocol 뒤에 둔다. 규칙은 import-linter 계약(AC-1~AC-6, `pyproject.toml`)으로 표현하고 CI가 검사한다.
+- **대안**: 기능별 수직 슬라이스(MVP 규모에서 이득이 작고 수집·인증은 기능 간 공유가 많음), 문서로만 관리(위반이 누적됨).
+- **결과**: 위반이 PR에서 바로 보이고 도메인·크롤러·OAuth를 가짜로 테스트한다. ports·DTO 변환 코드가 늘어난다.
+
+### ADR-0002 JWT와 Refresh Token 회전 (제안)
+- **배경**: F1-4/F1-5가 서비스 자체 JWT, Refresh 회전, 만료·위조 401, 로그아웃 시 Access 블랙리스트를 요구한다.
+- **결정**: Access는 짧은 만료(기본 15분, `sub`/`jti`/`exp`). Refresh는 서버에 저장(`jti`, `family_id`)하고 재발급마다 회전한다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401. 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트는 MVP에서 DB, 부하가 커지면 `TokenBlacklist` 포트 뒤에서 Redis로 교체한다.
+- **대안**: 세션 쿠키(명세가 JWT를 명시), Refresh 비회전(탈취 탐지가 어려움).
+- **결과**: 탈취 탐지와 즉시 로그아웃을 얻는다. 요청마다 블랙리스트 조회 비용과 정리 작업이 생긴다. 만료 시간·저장소는 Q-4에서 확정한다.
+
+### ADR-0003 소셜 로그인만 지원
+- **배경**: 명세가 회원가입(F1-1)·ID/비밀번호 로그인(F1-3)을 제외로 분류하고 소셜 로그인(F1-6)을 유일한 수단으로 정했다.
+- **결정**: Google/Kakao OAuth2만 지원하고 최초 로그인 시 `provider + providerId`로 자동 가입한다. 비밀번호 저장·재설정·가입 폼은 만들지 않는다. 탈퇴(F1-8) 시 OAuth 연결을 해제한다.
+- **대안**: ID·비밀번호 병행(비밀번호 보관·재설정 책임이 생기고 명세가 제외).
+- **결과**: 비밀번호 보안 부담이 없고 가입이 짧다. 제공자 장애·정책 변경에 종속되고, 이메일 없는 계정의 알림 채널(2차)은 별도 확인이 필요하다.
+
+### ADR-0004 API 규약
+- **배경**: 엔드포인트가 늘기 전에 에러·인증·페이지네이션 형태를 하나로 고정한다.
+- **결정**:
+  - 인증은 `Authorization: Bearer <access_token>`. 만료·위조·블랙리스트·이미 회전된 Refresh는 모두 **401**이고 `error.code`로 `TOKEN_EXPIRED` / `TOKEN_INVALID`를 구분한다.
+  - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
+  - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
+  - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
+- **엔드포인트 초안**:
+
+| 기능 | 메서드·경로 | 인증 |
+|---|---|---|
+| F1-6 | `GET /auth/{provider}/login`, `GET /auth/{provider}/callback` (`provider`: google/kakao) | 없음 |
+| F1-4 | `POST /auth/refresh` | Refresh |
+| F1-5 | `POST /auth/logout` | Access |
+| F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
+| F1-8 | `DELETE /users/me` | Access |
+| F2-3 | `GET /contests` | 선택 (로그인 시 프로필이 자격 필터 기본값) |
+| F2-4 | `GET /contests/{id}` | 선택 |
+| F2-5 | `POST /contests/{id}/clicks` → `{ "apply_url": ... }` | 선택 |
+| F2-7 | `PUT`·`DELETE /contests/{id}/bookmark`, `GET /users/me/bookmarks` | Access |
+
+- **결과**: 클라이언트가 한 가지 에러 처리만 구현하면 된다. 규약을 바꿀 때는 이 항목을 고친다.
+
+### ADR-0005 데이터 모델 원칙과 초안 (제안)
+- **원칙**: 시각은 tz-aware(UTC 저장, KST 변환). **접수 상태·D-day는 저장하지 않고** 조회 시점의 KST 날짜로 계산한다. 키워드 규칙·태그 어휘는 데이터/enum 하나를 단일 출처로 하고 프로필·태그·필터가 같이 쓴다. 마이그레이션은 Alembic.
+- **초안**:
+
+| 테이블 | 핵심 컬럼·제약 |
+|---|---|
+| users | id, provider, provider_id, nickname, grade, school_type, created_at. `UNIQUE(provider, provider_id)`, 프로필 미설정이면 nickname NULL |
+| user_interest_fields | user_id, field |
+| refresh_tokens | id, user_id, jti, family_id, expires_at, rotated_at, revoked_at |
+| access_token_blacklist | jti, expires_at (만료 후 정리) |
+| contests | id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, created_at, updated_at |
+| contest_sources | contest_id, source, source_url, fetched_at (병합 근거) |
+| contest_tags | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
+| qualification_rules | id, dimension, keyword, value, enabled |
+| contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
+| crawl_runs | id, source, started_at, finished_at, status, error |
+| bookmarks | `PK(user_id, contest_id)`, created_at |
+
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MVP에서 `ILIKE`. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
+
+### ADR-0006 검증은 GitHub Actions CI로 일원화
+- **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
+- **결정**: 린트·타입·아키텍처·테스트·Git 규약 검사는 `.github/workflows/ci.yml` 하나가 담당한다. 로컬 훅, Makefile, pre-commit, 문서 정합성 스크립트는 두지 않는다. 에이전트는 PR 전에 같은 명령을 로컬에서 돌려 볼 수 있지만 통과 기준은 CI다.
+- **대안**: 로컬 훅 + CI 이중 검증(관리할 파일이 많고 규칙이 두 곳에서 어긋남).
+- **결과**: 규칙의 단일 출처가 CI가 된다. 위반을 PR을 올린 뒤에야 알게 되므로, 로컬 사전 점검 명령을 AGENTS.md에 적어 둔다.
+
+## 결정이 필요한 항목
+
+| ID | 질문 | 영향 기능 | 제안(기본값) | 상태 |
+|---|---|---|---|---|
+| Q-1 | 크롤링 대상 사이트(소스) 목록과 robots.txt/이용약관 허용 범위는? | F2-1 | 사용자가 소스를 지정. 소스별 어댑터 + 요청 간 지연 | 열림 |
+| Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로 | 열림 |
+| Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 조회 가능 (기본 목록에서만 제외) | 열림 |
+| Q-4 | Access/Refresh 만료 시간과 Access 블랙리스트 저장소(DB vs Redis)는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일, MVP는 DB 테이블 | 열림 |
+| Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 2~12자, 중복 불가. 학교 유형: 중/고/대학교/기타 | 열림 |
+| Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 시작일 없으면 등록 즉시 '접수 중'으로 간주 | 열림 |
+| Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 로컬 삭제는 진행, revoke 실패는 로그 + 재시도 큐는 2차 | 열림 |
+| Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 사용자가 초안 제공, 에이전트가 설정 파일로 구성 | 열림 |
+| Q-9 | 한 대회에 여러 태그가 걸릴 때(예: 고등학생+대학생) 필터 매칭은 OR인가 AND인가? | F3-3 (ADR-0004) | 차원 안에서 OR, 차원 사이는 AND | 열림 |
+| Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
+| Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
+| Q-12 | PDF의 '기능 삭제' 커밋 타입 이모지는 이미지상 관(⚰️)으로 보이는데 맞나? | git-workflow 스킬 | ⚰️ 로 가정 | 열림 |
