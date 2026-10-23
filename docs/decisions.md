@@ -20,6 +20,7 @@
 | ADR-0005 | 데이터 모델 원칙과 초안 | 제안 | 전체 |
 | ADR-0006 | 검증은 GitHub Actions CI로 일원화 | 채택 | 전체 |
 | ADR-0007 | 기능별 패키지 + 얇은 3계층으로 단순화 | 채택 | 전체 |
+| ADR-0008 | PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소 | 채택 | 전체 (ADR-0005) |
 
 ### ADR-0001 레이어드 아키텍처와 import-linter (대체됨 → ADR-0007)
 - **배경**: 에이전트가 빠르게 코드를 만들수록 구조가 흐트러진다. 문서만으로는 레이어 규칙이 지켜지지 않는다.
@@ -72,15 +73,15 @@
 | user_interest_fields | user_id, field |
 | refresh_tokens | id, user_id, jti, family_id, expires_at, rotated_at, revoked_at |
 | access_token_blacklist | jti, expires_at (만료 후 정리) |
-| contests | id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, created_at, updated_at |
-| contest_sources | contest_id, source, source_url, fetched_at (병합 근거) |
-| contest_tags | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
+| contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, created_at, updated_at |
+| contest_sources (MongoDB) | contest_id, source, source_url, fetched_at (병합 근거) |
+| contest_tags (MongoDB) | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
 | qualification_rules | id, dimension, keyword, value, enabled |
 | contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MVP에서 `ILIKE`. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`가 없는 테이블은 PostgreSQL이다(ADR-0008). 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -93,6 +94,12 @@
 - **결정**: 기능 단위 패키지(`app/contests`, `app/auth`) 안에 `router` → `service` → `repository`를 두고, 순수 도메인 규칙은 `rules.py`, 공통 설정·시간 등은 `app/core`에 둔다. Protocol은 구현체가 여러 개인 경계(크롤러 `ContestSource`, OAuth `OAuthProvider`)에만 쓴다. import-linter 계약은 AC-1~AC-3 세 개로 줄인다.
 - **대안**: ADR-0001 유지(구조 강제는 강하지만 MVP 속도가 느림), 계약 없이 문서로만 관리(위반이 누적됨).
 - **결과**: 기능 코드가 한 폴더에 모여 찾기·수정이 쉽다. 서비스가 SQLAlchemy 등을 직접 알 수 있어 테스트는 DB 픽스처에 더 기댄다. 규모가 커지면 ports·계약을 다시 늘리는 ADR을 쓴다.
+
+### ADR-0008 PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소
+- **배경**: 크롤링한 대회 데이터는 소스마다 형태가 달라 스키마가 자주 바뀌고, 이후 대회 임베딩을 저장·검색할 벡터 저장소가 필요하다. 사용자·토큰 등은 관계형 제약(UNIQUE, 트랜잭션)이 중요하다.
+- **결정**: PostgreSQL(SQLAlchemy + Alembic)을 메인 DB로 두고 users, refresh_tokens, access_token_blacklist, bookmarks, contest_clicks, crawl_runs, qualification_rules 등을 저장한다. MongoDB(pymongo)에는 대회 데이터(contests, contest_sources, contest_tags)와 벡터(임베딩)를 저장한다. 연결은 `app/core/db.py`(MongoDB)에 두고, 컬렉션 접근은 각 기능의 `repository`에서만 한다.
+- **대안**: PostgreSQL 단일(+pgvector, 저장소 하나로 단순하지만 사용자가 MongoDB를 선택), MongoDB 단일(인증·토큰 회전의 관계형 제약을 직접 구현해야 함).
+- **결과**: 대회 스키마 변경에 마이그레이션이 필요 없고 벡터를 대회 문서 옆에 둘 수 있다. 두 DB 사이에는 FK·트랜잭션이 없어서 bookmarks·contest_clicks의 `contest_id`는 MongoDB `_id` 문자열을 참조만 하고, 대회 삭제·병합 시 정합성은 서비스 코드가 맞춘다.
 
 ## 결정이 필요한 항목
 
@@ -110,3 +117,4 @@
 | Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
 | Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
 | Q-12 | PDF의 '기능 삭제' 커밋 타입 이모지는 이미지상 관(⚰️)으로 보이는데 맞나? | git-workflow 스킬 | ⚰️ 로 가정 | 열림 |
+| Q-13 | 저장소를 MongoDB(pymongo)로 바꾸나, PostgreSQL(SQLAlchemy)과 함께 쓰나? AGENTS.md 스택·ADR-0005는 PostgreSQL+Alembic 기준이다 | 전체 (ADR-0005) | PostgreSQL 메인 + MongoDB(대회 데이터·벡터) → ADR-0008 | 결정됨 |
