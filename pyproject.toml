@@ -10,6 +10,7 @@ dependencies = [
     "alembic>=1.13",
     "pyjwt>=2.8",
     "httpx>=0.27",
+    "pymongo>=4.13",
 ]
 
 [dependency-groups]
