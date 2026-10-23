@@ -24,7 +24,7 @@ dev = [
 ]
 
 # ──────────────────────────────────────────────────────────────
-# 아키텍처 제약 (설명: AGENTS.md '아키텍처 제약', 근거: docs/decisions.md ADR-0001)
+# 아키텍처 제약 (설명: AGENTS.md '아키텍처 제약', 근거: docs/decisions.md ADR-0007)
 # 이 섹션을 약화하려면 먼저 docs/decisions.md 에 ADR을 추가한다.
 # ──────────────────────────────────────────────────────────────
 [tool.importlinter]
@@ -33,23 +33,12 @@ include_external_packages = true
 
 [[tool.importlinter.contracts]]
 id = "AC-1"
-name = "AC-1 레이어 방향: api/jobs -> services -> repositories -> domain"
-type = "layers"
-layers = [
-    "app.api | app.jobs",
-    "app.services",
-    "app.repositories",
-    "app.domain",
-]
-
-[[tool.importlinter.contracts]]
-id = "AC-2"
-name = "AC-2 domain은 순수 파이썬 (프레임워크·IO 금지)"
+name = "AC-1 rules는 순수 파이썬 (프레임워크·DB·HTTP 금지)"
 type = "forbidden"
-source_modules = ["app.domain"]
+source_modules = ["app.*.rules"]
 forbidden_modules = [
-    "app.infra",
     "sqlalchemy",
+    "pymongo",
     "fastapi",
     "starlette",
     "httpx",
@@ -57,51 +46,19 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+id = "AC-2"
+name = "AC-2 router는 repository를 직접 쓰지 않는다 (service 경유)"
+type = "forbidden"
+source_modules = ["app.*.router"]
+forbidden_modules = ["app.*.repository"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 id = "AC-3"
-name = "AC-3 services는 인프라·웹·ORM을 직접 알지 못한다 (ports 경유)"
+name = "AC-3 core는 기능 패키지를 import하지 않는다"
 type = "forbidden"
-source_modules = ["app.services"]
-forbidden_modules = [
-    "app.infra",
-    "app.repositories.models",
-    "sqlalchemy",
-    "fastapi",
-    "starlette",
-    "httpx",
-]
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-id = "AC-4"
-name = "AC-4 api/jobs는 repositories를 직접 쓰지 않는다 (조립 루트 deps/runner 예외)"
-type = "forbidden"
-source_modules = ["app.api", "app.jobs"]
-forbidden_modules = ["app.repositories"]
-allow_indirect_imports = true
-# 조립 루트는 아직 비어 있을 수 있으므로 매칭되지 않는 예외는 경고하지 않는다
-unmatched_ignore_imports_alerting = "none"
-ignore_imports = [
-    "app.api.deps -> app.repositories",
-    "app.api.deps -> app.repositories.*",
-    "app.jobs.runner -> app.repositories",
-    "app.jobs.runner -> app.repositories.*",
-]
-
-[[tool.importlinter.contracts]]
-id = "AC-5"
-name = "AC-5 infra는 상위 레이어를 import하지 않는다"
-type = "forbidden"
-source_modules = ["app.infra"]
-forbidden_modules = ["app.api", "app.jobs", "app.services"]
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-id = "AC-6"
-name = "AC-6 repositories는 services/api를 알지 못한다 (layers와 별개로 ORM 격리 보장)"
-type = "forbidden"
-source_modules = ["app.repositories"]
-forbidden_modules = ["app.services", "app.api", "app.jobs"]
-allow_indirect_imports = true
+source_modules = ["app.core"]
+forbidden_modules = ["app.contests", "app.auth"]
 
 # ──────────────────────────────────────────────────────────────
 # 린트 / 타입 / 테스트

@@ -29,19 +29,28 @@
 
 ## 아키텍처 제약
 
-의존 방향은 `api/jobs → services → repositories → domain` 뿐이다. 외부 시스템(크롤링 대상, OAuth, 이후 FCM)은 `app/domain/ports.py`의 Protocol 뒤에 두고, 구현체는 `app/infra/`에 둔다.
-계약의 실체는 `pyproject.toml`의 `[tool.importlinter]`이며 CI가 검사한다 ([ADR-0001](docs/decisions.md)).
+기능 단위 패키지 + 얇은 3계층 구조다 ([ADR-0007](docs/decisions.md)).
+
+```
+app/
+  main.py            # FastAPI 앱 조립, 라우터 등록
+  health.py
+  core/              # config, time(KST), db, errors 등 기능 공통
+  contests/          # router.py → service.py → repository.py, models.py, rules.py, crawlers/
+  auth/              # router.py → service.py → repository.py, models.py, oauth.py
+```
+
+- 기능 안의 호출 방향은 `router → service → repository`. 순수 도메인 규칙(상태·D-day·중복 제거·자격 분류)은 `rules.py`에 둔다.
+- Protocol은 구현체가 여러 개인 경계에만 쓴다: 크롤러(`contests/crawlers/base.py`의 `ContestSource`), OAuth(`auth/oauth.py`의 `OAuthProvider`).
+- 계약의 실체는 `pyproject.toml`의 `[tool.importlinter]`이며 CI가 검사한다.
 
 | ID | 규칙 |
 |---|---|
-| AC-1 | `api`/`jobs` → `services` → `repositories` → `domain` 방향으로만 import |
-| AC-2 | `domain`은 `sqlalchemy`, `fastapi`, `starlette`, `httpx`, `jwt`, `app.infra`를 import하지 않는다 |
-| AC-3 | `services`는 `app.infra`, `app.repositories.models`, `sqlalchemy`, `fastapi`, `httpx`를 직접 import하지 않는다 (ports 경유) |
-| AC-4 | `api`/`jobs`는 `repositories`를 직접 import하지 않는다. 예외는 조립 루트 `app/api/deps.py`, `app/jobs/runner.py` |
-| AC-5 | `infra`는 `api`/`jobs`/`services`를 import하지 않는다 |
-| AC-6 | `repositories`는 `services`/`api`/`jobs`를 import하지 않는다 |
+| AC-1 | `app.*.rules`는 `sqlalchemy`, `pymongo`, `fastapi`, `starlette`, `httpx`, `jwt`를 import하지 않는다 |
+| AC-2 | `app.*.router`는 `app.*.repository`를 직접 import하지 않는다 (service 경유) |
+| AC-3 | `app.core`는 기능 패키지(`app.contests`, `app.auth`)를 import하지 않는다 |
 
-위반은 import를 지우거나 우회하지 말고 **의존을 ports로 뒤집어** 해결한다.
+위반은 import를 지우거나 우회하지 말고 로직을 올바른 계층으로 옮겨 해결한다.
 코드 규칙은 ruff와 mypy가 강제한다: 타입 주석 필수(strict), naive `datetime` 금지, `print` 금지, `requests` 금지(httpx만), 함수 복잡도 10 이하.
 
 ## 피드백 루프 (CI)
