@@ -113,7 +113,9 @@ def test_linkareer_paginates_until_total() -> None:
     requested: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        page = json.loads(request.content)["variables"]["page"]
+        variables = json.loads(request.content)["variables"]
+        assert variables["categoryIDs"] == ["35", "28"]
+        page = variables["page"]
         requested.append(page)
         return httpx.Response(
             200, json={"data": {"activities": {"totalCount": 3, "nodes": pages[page]}}}

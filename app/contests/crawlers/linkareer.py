@@ -19,11 +19,13 @@ URL = "https://api.linkareer.com/graphql"
 DETAIL_URL = "https://linkareer.com/activity/{id}"
 PAGE_SIZE = 50
 MAX_PAGES = 40
+# 수집할 공모전 카테고리 (Q-15): 35 과학/공학, 28 기획/아이디어
+CATEGORY_IDS = ("35", "28")
 # activityTypeID 3 = 공모전
 QUERY = """
-query Contests($page: Int!, $size: Int!) {
+query Contests($page: Int!, $size: Int!, $categoryIDs: [ID!]) {
   activities(
-    filterBy: {activityTypeID: "3", status: OPEN}
+    filterBy: {activityTypeID: "3", status: OPEN, categoryIDs: $categoryIDs}
     orderBy: {direction: DESC, field: CREATED_AT}
     pagination: {page: $page, pageSize: $size}
   ) {
@@ -60,7 +62,11 @@ class LinkareerSource:
 
     def _fetch_page(self, page: int) -> tuple[int, list[dict[str, Any]]]:
         res = self._client.post(
-            URL, json={"query": QUERY, "variables": {"page": page, "size": PAGE_SIZE}}
+            URL,
+            json={
+                "query": QUERY,
+                "variables": {"page": page, "size": PAGE_SIZE, "categoryIDs": list(CATEGORY_IDS)},
+            },
         )
         res.raise_for_status()
         body = res.json()

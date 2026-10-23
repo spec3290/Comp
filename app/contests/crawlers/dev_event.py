@@ -56,7 +56,7 @@ def _to_contest(event: dict[str, Any]) -> RawContest | None:
         host=event["organizer"].strip(),
         field=", ".join(tag for tag in tags if tag not in NON_FIELD_TAGS),
         apply_start=start if recruit else None,
-        # 행사 당일 일정(DATE)만 있으면 시작일을 접수 마감으로 본다 (가정, Q-14)
+        # 행사 당일 일정(DATE)만 있으면 시작일을 접수 마감으로 본다 (Q-14)
         apply_end=end if recruit else start,
         event_start=None if recruit else start,
         event_end=None if recruit else end,
