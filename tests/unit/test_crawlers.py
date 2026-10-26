@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.contests.crawlers.dacon import DaconSource
+from app.contests.crawlers.dacon import DaconSource, parse_apply_period
 from app.contests.crawlers.dev_event import DevEventSource
 from app.contests.crawlers.linkareer import LinkareerSource
 
@@ -88,9 +88,39 @@ def test_dacon_maps_public_competitions() -> None:
     contest = contests[0]
     assert contest.host == "데이콘"
     assert contest.field == "알고리즘, 코드 제출 평가"
-    assert contest.apply_start is None
-    assert contest.apply_end == date(2026, 11, 2)
+    # 일정에 참가 기간이 없으면 대회 기간을 접수 기간으로 쓴다
+    assert (contest.apply_start, contest.apply_end) == (date(2026, 10, 12), date(2026, 11, 2))
+    assert (contest.event_start, contest.event_end) == (date(2026, 10, 12), date(2026, 11, 2))
     assert contest.source_url.endswith("/236771/overview/description")
+
+
+@pytest.mark.feature("F2-1")
+@pytest.mark.parametrize(
+    ("schedule", "expected"),
+    [
+        (
+            "<p>- 참가 기간 : 2026년 09월 30일(수) ~ 2026년 11월 02일(월) 10:00</p>"
+            "<p>- 대회 기간 : 2026년 10월 12일(월) 10:00 ~ 2026년 11월 02일(월) 10:00</p>",
+            (date(2026, 9, 30), date(2026, 11, 2)),
+        ),
+        (
+            "- 대회 기간: 2026.07.16 (목) ~ 2026.08.20 (목)<br>"
+            "- 참가 신청 기간: 2026.07.16 (목) 오전 10시 ~ 2026.08.17 (월) 오후 11시 59분",
+            (date(2026, 7, 16), date(2026, 8, 17)),
+        ),
+        (
+            "- 참가자 모집 기간 : 2025년 9월 29일 (월) ~ 2025년 11월 14일 (금)",
+            (date(2025, 9, 29), date(2025, 11, 14)),
+        ),
+        ("- 대회 기간 : 2026년 10월 12일 ~ 2026년 11월 02일", None),
+        ("- 참가 기간 : 2026년 13월 01일 ~ 2026년 11월 02일", None),
+        (None, None),
+    ],
+)
+def test_dacon_parses_apply_period_from_schedule(
+    schedule: str | None, expected: tuple[date, date] | None
+) -> None:
+    assert parse_apply_period(schedule) == expected
 
 
 def _linkareer_node(node_id: str) -> dict[str, Any]:

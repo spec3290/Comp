@@ -1,5 +1,6 @@
 """대회 수집 실행 진입점: `uv run python -m app.contests.collect`
 
+수집이 끝나면 마감 3일이 지난 대회를 지운다 (Q-3).
 주기 실행(예: 하루 1회)은 이 명령을 스케줄러에 등록한다.
 """
 
@@ -12,20 +13,24 @@ from app.contests.crawlers.dacon import DaconSource
 from app.contests.crawlers.dev_event import DevEventSource
 from app.contests.crawlers.linkareer import LinkareerSource
 from app.contests.repository import ContestRepository
-from app.contests.service import CollectResult, collect
+from app.contests.service import CollectResult, collect, purge_closed
 from app.core.db import close_client, get_database
+from app.core.time import now_kst
 
 
 def run() -> list[CollectResult]:
     repo = ContestRepository(get_database())
     repo.ensure_indexes()
+    today = now_kst().date()
     with new_client() as client:
         sources: list[ContestSource] = [
             DevEventSource(client),
             DaconSource(client),
             LinkareerSource(client),
         ]
-        return collect(sources, repo)
+        results = collect(sources, repo, today)
+    purge_closed(repo, today)
+    return results
 
 
 def main() -> int:

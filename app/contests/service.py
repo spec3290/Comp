@@ -1,7 +1,8 @@
-"""대회 수집 (F2-1) + 중복 제거 (F2-2).
+"""대회 수집 (F2-1) + 중복 제거 (F2-2) + 조회 (F2-3, F2-4).
 
-소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만 남기며,
-다른 소스는 계속 진행한다.
+수집: 소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만
+남기며, 다른 소스는 계속 진행한다. 마감 3일이 지난 대회는 지운다 (Q-3).
+조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다.
 """
 
 from __future__ import annotations
@@ -10,10 +11,13 @@ import logging
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import date
 
 from app.contests.crawlers.base import ContestSource
-from app.contests.repository import ContestRepository, SaveOutcome
-from app.contests.rules import merge_key
+from app.contests.repository import ContestRecord, ContestRepository, SaveOutcome
+from app.contests.rules import ApplyPeriod, ContestQuery, ContestStatus, merge_key, purge_cutoff
+from app.core.db import get_database
+from app.core.errors import NotFoundError
 from app.core.time import now_kst
 
 logger = logging.getLogger(__name__)
@@ -23,20 +27,27 @@ logger = logging.getLogger(__name__)
 class CollectResult:
     source: str
     fetched: int = 0
+    skipped: int = 0  # 이미 삭제 기준을 넘긴 마감 대회 (Q-3)
     outcomes: Counter[SaveOutcome] = field(default_factory=Counter)
     error: str | None = None
 
 
-def collect(sources: Iterable[ContestSource], repo: ContestRepository) -> list[CollectResult]:
-    return [_collect_one(source, repo) for source in sources]
+def collect(
+    sources: Iterable[ContestSource], repo: ContestRepository, today: date
+) -> list[CollectResult]:
+    return [_collect_one(source, repo, today) for source in sources]
 
 
-def _collect_one(source: ContestSource, repo: ContestRepository) -> CollectResult:
+def _collect_one(source: ContestSource, repo: ContestRepository, today: date) -> CollectResult:
     result = CollectResult(source=source.name)
+    cutoff = purge_cutoff(today)
     try:
         contests = source.fetch()
         result.fetched = len(contests)
         for contest in contests:
+            if contest.apply_end < cutoff:
+                result.skipped += 1
+                continue
             key = merge_key(contest.title, contest.host, contest.apply_end)
             result.outcomes[repo.save(contest, key, now_kst())] += 1
     except Exception as exc:
@@ -44,5 +55,57 @@ def _collect_one(source: ContestSource, repo: ContestRepository) -> CollectResul
         result.error = f"{type(exc).__name__}: {exc}"
         return result
     counts = {outcome.value: n for outcome, n in result.outcomes.items()}
-    logger.info("수집 완료: %s fetched=%d %s", source.name, result.fetched, counts)
+    logger.info(
+        "수집 완료: %s fetched=%d skipped=%d %s",
+        source.name,
+        result.fetched,
+        result.skipped,
+        counts,
+    )
     return result
+
+
+def purge_closed(repo: ContestRepository, today: date) -> int:
+    deleted = repo.delete_closed_before(purge_cutoff(today))
+    logger.info("마감 대회 삭제: %d건 (마감일 < %s)", deleted, purge_cutoff(today))
+    return deleted
+
+
+@dataclass(frozen=True)
+class ContestView:
+    record: ContestRecord
+    status: ContestStatus
+    d_day: int
+
+
+@dataclass(frozen=True)
+class ContestPage:
+    items: list[ContestView]
+    page: int
+    size: int
+    total: int
+
+
+def _view(record: ContestRecord, today: date) -> ContestView:
+    period = ApplyPeriod(start=record.apply_start, end=record.apply_end)
+    return ContestView(record=record, status=period.status(today), d_day=period.d_day(today))
+
+
+class ContestQueryService:
+    def __init__(self, repo: ContestRepository) -> None:
+        self._repo = repo
+
+    def list_contests(self, query: ContestQuery, today: date) -> ContestPage:
+        records, total = self._repo.find(query, today)
+        items = [_view(record, today) for record in records]
+        return ContestPage(items=items, page=query.page, size=query.size, total=total)
+
+    def get_contest(self, contest_id: str, today: date) -> ContestView:
+        record = self._repo.get(contest_id)
+        if record is None:
+            raise NotFoundError("대회를 찾을 수 없습니다.")
+        return _view(record, today)
+
+
+def get_query_service() -> ContestQueryService:
+    return ContestQueryService(ContestRepository(get_database()))
