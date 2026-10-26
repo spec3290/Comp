@@ -156,5 +156,9 @@ class TokenStore:
         if remaining_ms > 0:
             self._redis.set(_blacklist_key(jti), "1", px=remaining_ms + 1000)
 
-    def is_blacklisted(self, jti: str) -> bool:
-        return bool(self._redis.exists(_blacklist_key(jti)))
+    def is_access_revoked(self, jti: str, family_id: str) -> bool:
+        """이 Access 가 블랙리스트에 있거나 세션(family)이 폐기됐다. 한 번의 EXISTS 로 본다.
+
+        세션 폐기 표식은 Refresh 만료 시간만큼 남으므로 그 세션의 어떤 Access 보다 오래 간다.
+        """
+        return bool(self._redis.exists(_blacklist_key(jti), _revoked_key(family_id)))

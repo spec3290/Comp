@@ -115,9 +115,12 @@ class TokenIssuer:
             raise TokenInvalidError("유효하지 않은 토큰입니다.") from exc
 
     def authenticate(self, access_token: str) -> TokenClaims:
-        """API 요청의 Access 를 검증한다. 로그아웃해 블랙리스트에 오른 토큰도 거절한다."""
+        """API 요청의 Access 를 검증한다.
+
+        로그아웃한 토큰과, 로그아웃·재사용 탐지로 폐기된 세션에서 이전에 발급한 Access 도 거절한다.
+        """
         claims = self.verify(access_token, "access")
-        if self._store.is_blacklisted(claims.jti):
+        if self._store.is_access_revoked(claims.jti, claims.family_id):
             raise TokenInvalidError("로그아웃한 토큰입니다. 다시 로그인해 주세요.")
         return claims
 
