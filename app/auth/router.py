@@ -45,4 +45,5 @@ def callback(
 ) -> TokenOut:
     result = service.complete_login(provider, code, state, oauth_state)
     response.delete_cookie(STATE_COOKIE, path="/auth")  # state 는 한 번만 쓴다
+    response.headers["Cache-Control"] = "no-store"  # 본문에 토큰이 있어 캐시하지 않는다
     return TokenOut.from_result(result)

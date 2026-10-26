@@ -139,7 +139,12 @@ class AuthService:
         expected_state: str | None,
     ) -> LoginResult:
         provider = self._provider(provider_name)
-        if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        # str 끼리는 ASCII 만 비교할 수 있어 비ASCII state 가 500 이 되지 않게 바이트로 비교한다
+        if (
+            not state
+            or not expected_state
+            or not secrets.compare_digest(state.encode(), expected_state.encode())
+        ):
             raise OAuthStateMismatchError("로그인 요청이 만료되었거나 올바르지 않습니다.")
         if not code:
             # 사용자가 동의 화면에서 취소하면 code 없이 error 만 돌아온다

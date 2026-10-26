@@ -12,7 +12,13 @@ from app.core.db import get_settings
 
 @lru_cache
 def get_redis() -> Redis:
-    return Redis.from_url(get_settings().redis_url, decode_responses=True)
+    # Redis 가 응답하지 않을 때 요청 스레드가 무한정 묶이지 않게 한다
+    return Redis.from_url(
+        get_settings().redis_url,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
 
 
 def close_redis() -> None:
