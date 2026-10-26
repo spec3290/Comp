@@ -1,4 +1,4 @@
-"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5).
+"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5) + 내 정보·프로필 (F1-7).
 
 로그인은 두 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
 쿠키로 보관한 state 와 비교해 CSRF 를 막은 뒤 인가 코드를 회원 식별자로 바꾼다.
@@ -21,8 +21,10 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.auth.models import User
 from app.auth.oauth import GoogleConfig, GoogleOAuth, OAuthFailedError, OAuthProvider
-from app.auth.repository import TokenStore, UserRepository
+from app.auth.repository import NicknameConflictError, TokenStore, UserRepository
+from app.auth.rules import ProfileInput, ordered_fields
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
 from app.core.db import get_settings
@@ -37,6 +39,11 @@ logger = logging.getLogger(__name__)
 class OAuthStateMismatchError(AppError):
     status_code = 400
     code = "OAUTH_STATE_MISMATCH"
+
+
+class NicknameTakenError(AppError):
+    status_code = 409
+    code = "NICKNAME_TAKEN"
 
 
 @dataclass(frozen=True)
@@ -111,6 +118,34 @@ class AuthService:
         return provider
 
 
+class UserService:
+    def __init__(self, users: UserRepository) -> None:
+        self._users = users
+
+    def get_me(self, user_id: int) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 토큰은 맞지만 탈퇴한 회원 (F1-8)
+        return user
+
+    def update_profile(self, user_id: int, profile: ProfileInput) -> User:
+        """온보딩·프로필 수정. 저장하면 needs_onboarding 이 false 가 된다."""
+        user = self.get_me(user_id)
+        if self._users.nickname_taken(profile.nickname, user.id):
+            raise NicknameTakenError("이미 사용 중인 닉네임입니다.")
+        try:
+            self._users.update_profile(
+                user,
+                nickname=profile.nickname,
+                grade=profile.grade,
+                school_type=profile.school_type.value,
+                fields=[f.value for f in ordered_fields(profile.interest_fields)],
+            )
+        except NicknameConflictError as exc:
+            raise NicknameTakenError("이미 사용 중인 닉네임입니다.") from exc
+        return user
+
+
 @lru_cache
 def get_http_client() -> httpx.Client:
     """제공자 호출용 클라이언트. 프로세스당 하나를 재사용하고 종료 때 닫는다."""
@@ -157,6 +192,10 @@ def get_auth_service(
         users=UserRepository(session),
         issuer=issuer,
     )
+
+
+def get_user_service(session: Annotated[Session, Depends(get_session)]) -> UserService:
+    return UserService(UserRepository(session))
 
 
 _bearer = HTTPBearer(auto_error=False, description="로그인·재발급으로 받은 Access Token")

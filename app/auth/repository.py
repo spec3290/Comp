@@ -19,7 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth.models import User
+from app.auth.models import User, UserInterestField
+
+
+class NicknameConflictError(Exception):
+    """다른 회원이 이미 쓰는 닉네임이다 (UNIQUE 제약)."""
 
 
 class UserRepository:
@@ -53,6 +57,35 @@ class UserRepository:
                 raise
             return existing, False
         return user, True
+
+    def nickname_taken(self, nickname: str, exclude_user_id: int) -> bool:
+        stmt = select(User.id).where(User.nickname == nickname, User.id != exclude_user_id)
+        return self._session.scalars(stmt).first() is not None
+
+    def update_profile(
+        self,
+        user: User,
+        nickname: str,
+        grade: int | None,
+        school_type: str,
+        fields: list[str],
+    ) -> None:
+        """프로필을 통째로 바꾼다. 관심 분야는 바뀐 것만 지우고 더한다.
+
+        확인과 저장 사이에 다른 회원이 같은 닉네임을 먼저 저장하면 UNIQUE 제약에 걸려
+        NicknameConflictError 가 난다.
+        """
+        user.nickname, user.grade, user.school_type = nickname, grade, school_type
+        wanted = set(fields)
+        for interest in [i for i in user.interests if i.field not in wanted]:
+            user.interests.remove(interest)
+        current = {i.field for i in user.interests}
+        user.interests.extend(UserInterestField(field=f) for f in fields if f not in current)
+        try:
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise NicknameConflictError(nickname) from exc
 
 
 def _refresh_key(jti: str) -> str:
