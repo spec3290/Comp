@@ -30,7 +30,7 @@
 
 ### ADR-0002 JWT와 Refresh Token 회전 (채택)
 - **배경**: F1-4/F1-5가 서비스 자체 JWT, Refresh 회전, 만료·위조 401, 로그아웃 시 Access 블랙리스트를 요구한다.
-- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`type`/`iat`/`exp`, HS256). Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트 저장소는 Q-17.
+- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`type`/`iat`/`exp`, HS256). Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 폐기는 `refresh_family_revoked:{family_id}` 표식을 먼저 남기고, 새 Refresh 저장은 이 표식을 WATCH한 트랜잭션에서 해서 재발급과 폐기가 겹쳐도 폐기된 family에 토큰이 남지 않는다. `JWT_SECRET`은 32바이트 이상이어야 하고 앱 기동 때 검사한다. 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트 저장소는 Q-17.
 - **대안**: 세션 쿠키(명세가 JWT를 명시), Refresh 비회전(탈취 탐지가 어려움).
 - **결과**: 탈취 탐지와 즉시 로그아웃을 얻는다. 요청마다 블랙리스트 조회 비용과 정리 작업이 생긴다. Refresh 저장소가 Redis라 Redis가 내려가면 로그인·재발급이 실패한다.
 
