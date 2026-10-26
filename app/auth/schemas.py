@@ -17,7 +17,6 @@ from app.auth.rules import (
 )
 from app.auth.service import LoginResult
 from app.auth.tokens import IssuedTokens
-from app.core.time import to_kst
 
 
 class TokenOut(BaseModel):
@@ -92,5 +91,5 @@ class UserOut(BaseModel):
             school_type=SchoolType(user.school_type) if user.school_type else None,
             interest_fields=ordered_fields({InterestField(i.field) for i in user.interests}),
             needs_onboarding=user.needs_onboarding,
-            created_at=to_kst(user.created_at),
+            created_at=user.created_at,
         )
