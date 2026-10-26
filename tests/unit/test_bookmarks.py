@@ -220,9 +220,10 @@ def test_my_bookmarks_show_contests_closed_after_saving(
     ],
 )
 def test_bookmark_endpoints_without_token_return_401(
-    service: BookmarkService, method: str, path: str
+    service: BookmarkService, issuer: TokenIssuer, method: str, path: str
 ) -> None:
     app.dependency_overrides[get_bookmark_service] = lambda: service
+    app.dependency_overrides[get_token_issuer] = lambda: issuer
     try:
         res = TestClient(app).request(method, path)
     finally:
