@@ -1,21 +1,17 @@
 """토큰 재발급 (F1-4): Refresh 회전, 재사용 탐지, 만료·위조 401, Access 검증 의존성."""
 
-from collections.abc import Iterator
 from datetime import timedelta
 
 import fakeredis
 import jwt
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.repository import RefreshTokenStore
-from app.auth.service import CurrentToken, get_token_issuer
+from app.auth.repository import TokenStore
 from app.auth.tokens import JWT_ALGORITHM, TokenIssuer
-from app.core.errors import install_error_handlers
 from app.core.time import now_kst
 from tests.unit.auth_support import REFRESH_TTL, bearer, claims, login
 
@@ -162,7 +158,7 @@ def test_refresh_without_token_returns_400(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-4")
 def test_concurrent_consume_marks_only_one_as_first_use(redis: fakeredis.FakeRedis) -> None:
-    store = RefreshTokenStore(redis)
+    store = TokenStore(redis)
     store.save("jti-1", 7, "family-1", REFRESH_TTL)
 
     first, second = store.consume("jti-1"), store.consume("jti-1")
@@ -172,20 +168,7 @@ def test_concurrent_consume_marks_only_one_as_first_use(redis: fakeredis.FakeRed
     assert store.consume("unknown") is None
 
 
-# Access 검증 의존성: 인증이 필요한 API 가 쓸 `CurrentToken` 을 작은 앱에서 확인한다.
-
-
-@pytest.fixture
-def protected(issuer: TokenIssuer) -> Iterator[TestClient]:
-    api = FastAPI()
-    install_error_handlers(api)
-
-    @api.get("/protected")
-    def protected_route(token: CurrentToken) -> dict[str, int]:
-        return {"user_id": token.user_id}
-
-    api.dependency_overrides[get_token_issuer] = lambda: issuer
-    yield TestClient(api)
+# Access 검증 의존성: 인증이 필요한 API 가 쓸 `CurrentToken` (protected fixture, conftest.py).
 
 
 @pytest.mark.feature("F1-4")
