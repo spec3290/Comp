@@ -10,6 +10,7 @@ Refresh Token 은 `refresh:{jti}` 해시에 user_id·family_id 를 담고, 만�
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -146,9 +147,14 @@ class TokenStore:
         self._redis.delete(family, *(_refresh_key(str(jti)) for jti in jtis))
 
     def blacklist(self, jti: str, ttl: timedelta) -> None:
-        """Access 를 만료 때까지 막는다. 이미 만료됐으면 저장할 필요가 없다."""
-        if ttl.total_seconds() >= 1:
-            self._redis.set(_blacklist_key(jti), "1", ex=ttl)
+        """Access 를 만료 때까지 막는다. 이미 만료됐으면 저장할 필요가 없다.
+
+        초 단위로 넘기면 남은 시간이 잘려 만료 직전에 토큰이 다시 통과할 수 있어서, 밀리초로
+        올림하고 시계 오차만큼 1초를 더 둔다.
+        """
+        remaining_ms = math.ceil(ttl.total_seconds() * 1000)
+        if remaining_ms > 0:
+            self._redis.set(_blacklist_key(jti), "1", px=remaining_ms + 1000)
 
     def is_blacklisted(self, jti: str) -> bool:
         return bool(self._redis.exists(_blacklist_key(jti)))
