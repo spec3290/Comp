@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 JWT_ALGORITHM = "HS256"
 MIN_SECRET_BYTES = 32
 TokenType = Literal["access", "refresh"]
-_REQUIRED_CLAIMS = ["sub", "jti", "type", "iat", "exp"]
+# `fam` 이 없는 토큰(F1-5 이전 발급)은 로그아웃할 세션을 찾을 수 없어 받지 않는다. 재발급하면 붙는다
+_REQUIRED_CLAIMS = ["sub", "jti", "fam", "type", "iat", "exp"]
 
 
 class TokenExpiredError(AppError):
@@ -49,7 +50,7 @@ class IssuedTokens:
 class TokenClaims:
     user_id: int
     jti: str
-    family_id: str | None  # 로그인 세션. F1-5 이전에 발급한 Access 에는 없다
+    family_id: str  # 로그인 세션
     expires_at: datetime
 
 
@@ -107,7 +108,7 @@ class TokenIssuer:
             return TokenClaims(
                 user_id=int(claims["sub"]),
                 jti=str(claims["jti"]),
-                family_id=str(claims["fam"]) if "fam" in claims else None,
+                family_id=str(claims["fam"]),
                 expires_at=datetime.fromtimestamp(int(claims["exp"]), tz=KST),
             )
         except (TypeError, ValueError) as exc:
@@ -122,8 +123,7 @@ class TokenIssuer:
 
     def revoke_session(self, access: TokenClaims, now: datetime) -> None:
         """로그아웃: 이 로그인 세션(family)의 Refresh 를 지우고 쓰던 Access 를 만료까지 막는다."""
-        if access.family_id is not None:
-            self._store.revoke_family(access.family_id, self._refresh_ttl)
+        self._store.revoke_family(access.family_id, self._refresh_ttl)
         self._store.blacklist(access.jti, access.expires_at - now)
 
     def rotate(self, refresh_token: str) -> RefreshRecord:

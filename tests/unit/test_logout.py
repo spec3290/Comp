@@ -3,11 +3,14 @@
 from datetime import timedelta
 
 import fakeredis
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.repository import TokenStore
-from tests.unit.auth_support import ACCESS_TTL, bearer, claims, login
+from app.auth.tokens import JWT_ALGORITHM, TokenIssuer
+from app.core.time import now_kst
+from tests.unit.auth_support import ACCESS_TTL, SECRET, bearer, claims, login
 
 
 def _logout(client: TestClient, access: object) -> int:
@@ -74,7 +77,7 @@ def test_blacklist_entry_expires_with_access_token(
     _logout(client, access)
 
     ttl = redis.ttl(f"blacklist:{claims(access)['jti']}")
-    assert ACCESS_TTL.total_seconds() - 5 <= ttl <= ACCESS_TTL.total_seconds()
+    assert ACCESS_TTL.total_seconds() - 5 <= ttl <= ACCESS_TTL.total_seconds() + 1
 
 
 @pytest.mark.feature("F1-5")
@@ -99,3 +102,25 @@ def test_already_expired_access_is_not_stored(redis: fakeredis.FakeRedis, second
     TokenStore(redis).blacklist("expired-access", timedelta(seconds=seconds))
 
     assert redis.exists("blacklist:expired-access") == 0
+
+
+@pytest.mark.feature("F1-5")
+def test_sub_second_remaining_access_is_still_blacklisted(redis: fakeredis.FakeRedis) -> None:
+    TokenStore(redis).blacklist("almost-expired", timedelta(milliseconds=400))
+
+    assert redis.pttl("blacklist:almost-expired") >= 400  # 초 단위로 잘려 0 이 되지 않는다
+
+
+@pytest.mark.feature("F1-5")
+def test_access_without_session_claim_is_rejected(
+    protected: TestClient, issuer: TokenIssuer
+) -> None:
+    """F1-5 이전에 발급돼 `fam` 이 없는 Access 는 로그아웃할 세션을 몰라 받지 않는다."""
+    payload = claims(issuer.issue(1, now_kst()).access_token)
+    del payload["fam"]
+    legacy = jwt.encode(payload, SECRET, algorithm=JWT_ALGORITHM)
+
+    response = protected.get("/protected", headers=bearer(legacy))
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "TOKEN_INVALID"
