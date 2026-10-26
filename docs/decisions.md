@@ -14,7 +14,7 @@
 | ID | 제목 | 상태 | 관련 기능 |
 |---|---|---|---|
 | ADR-0001 | 레이어드 아키텍처와 import-linter | 대체됨 (ADR-0007) | 전체 |
-| ADR-0002 | JWT와 Refresh Token 회전 | 채택 (블랙리스트 저장소는 Q-17) | F1-4, F1-5 |
+| ADR-0002 | JWT와 Refresh Token 회전 | 채택 | F1-4, F1-5 |
 | ADR-0003 | 소셜 로그인만 지원 | 채택 | F1-6, F1-8 |
 | ADR-0004 | API 규약 (에러·인증·페이지네이션) | 채택 | 전체 |
 | ADR-0005 | 데이터 모델 원칙과 초안 | 제안 | 전체 |
@@ -30,7 +30,7 @@
 
 ### ADR-0002 JWT와 Refresh Token 회전 (채택)
 - **배경**: F1-4/F1-5가 서비스 자체 JWT, Refresh 회전, 만료·위조 401, 로그아웃 시 Access 블랙리스트를 요구한다.
-- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`type`/`iat`/`exp`, HS256). Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트 저장소는 Q-17.
+- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`fam`/`type`/`iat`/`exp`, HS256). `fam`은 로그인 세션(family) 식별자로 Refresh와 같다. Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 로그아웃은 Access의 `fam`으로 그 세션의 Refresh를 전부 지우고(다른 기기 로그인은 유지), 쓰던 Access `jti`를 Redis `blacklist:{jti}`에 남은 만료 시간만큼 TTL로 둔다(Q-17). 인증이 필요한 요청마다 블랙리스트를 조회한다.
 - **대안**: 세션 쿠키(명세가 JWT를 명시), Refresh 비회전(탈취 탐지가 어려움).
 - **결과**: 탈취 탐지와 즉시 로그아웃을 얻는다. 요청마다 블랙리스트 조회 비용과 정리 작업이 생긴다. Refresh 저장소가 Redis라 Redis가 내려가면 로그인·재발급이 실패한다.
 
@@ -57,7 +57,7 @@
 |---|---|---|
 | F1-6 | `GET /auth/{provider}/login`, `GET /auth/{provider}/callback` (`provider`: google/kakao) | 없음 |
 | F1-4 | `POST /auth/refresh` (본문 `refresh_token`) | Refresh |
-| F1-5 | `POST /auth/logout` | Access |
+| F1-5 | `POST /auth/logout` → 204 | Access |
 | F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
 | F1-8 | `DELETE /users/me` | Access |
 | F2-3 | `GET /contests` | 선택 (로그인 시 프로필이 자격 필터 기본값) |
@@ -76,7 +76,7 @@
 | users | id, provider, provider_id, nickname, grade, school_type, created_at. `UNIQUE(provider, provider_id)`, 프로필 미설정이면 nickname NULL |
 | user_interest_fields | user_id, field |
 | refresh_tokens (Redis) | 테이블 없이 `refresh:{jti}` 해시: user_id, family_id. 만료는 Redis TTL (Q-4) |
-| access_token_blacklist | jti, expires_at (만료 후 정리) |
+| access_token_blacklist (Redis) | 테이블 없이 `blacklist:{jti}`. 만료는 Redis TTL이라 정리 작업이 없다 (Q-17) |
 | contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
 | contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
 | contest_tags (MongoDB) | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
@@ -101,7 +101,7 @@
 
 ### ADR-0008 PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소
 - **배경**: 크롤링한 대회 데이터는 소스마다 형태가 달라 스키마가 자주 바뀌고, 이후 대회 임베딩을 저장·검색할 벡터 저장소가 필요하다. 사용자·토큰 등은 관계형 제약(UNIQUE, 트랜잭션)이 중요하다.
-- **결정**: PostgreSQL(SQLAlchemy + Alembic, `migrations/`)을 메인 DB로 두고 users, access_token_blacklist, bookmarks, contest_clicks, crawl_runs, qualification_rules 등을 저장한다. MongoDB(pymongo)에는 대회 데이터(contests, contest_sources, contest_tags)와 벡터(임베딩)를 저장한다. 만료가 있는 Refresh Token은 Redis(redis-py)에 둔다(Q-4). 연결은 `app/core/db.py`(MongoDB), `app/core/sql.py`(PostgreSQL), `app/core/kv.py`(Redis)에 두고, 실제 접근은 각 기능의 `repository`에서만 한다. 로컬 개발용 PostgreSQL·Redis는 `docker-compose.yml`로 띄운다.
+- **결정**: PostgreSQL(SQLAlchemy + Alembic, `migrations/`)을 메인 DB로 두고 users, bookmarks, contest_clicks, crawl_runs, qualification_rules 등을 저장한다. MongoDB(pymongo)에는 대회 데이터(contests, contest_sources, contest_tags)와 벡터(임베딩)를 저장한다. 만료가 있는 Refresh Token과 Access 블랙리스트는 Redis(redis-py)에 둔다(Q-4, Q-17). 연결은 `app/core/db.py`(MongoDB), `app/core/sql.py`(PostgreSQL), `app/core/kv.py`(Redis)에 두고, 실제 접근은 각 기능의 `repository`에서만 한다. 로컬 개발용 PostgreSQL·Redis는 `docker-compose.yml`로 띄운다.
 - **대안**: PostgreSQL 단일(+pgvector, 저장소 하나로 단순하지만 사용자가 MongoDB를 선택), MongoDB 단일(인증·토큰 회전의 관계형 제약을 직접 구현해야 함).
 - **결과**: 대회 스키마 변경에 마이그레이션이 필요 없고 벡터를 대회 문서 옆에 둘 수 있다. 두 DB 사이에는 FK·트랜잭션이 없어서 bookmarks·contest_clicks의 `contest_id`는 MongoDB `_id` 문자열을 참조만 하고, 대회 삭제·병합 시 정합성은 서비스 코드가 맞춘다.
 
@@ -125,4 +125,4 @@
 | Q-14 | Dev Event에서 접수 기간 없이 행사 당일 일정(`DATE`)만 있는 대회의 접수 마감일은? | F2-1, F2-3 | 행사 시작일을 접수 마감일로 간주 | 결정됨 |
 | Q-15 | 링커리어 공모전은 분야 제한 없이(네이밍·사진·UCC 등 포함) 모두 수집하나, 개발·AI·보안·디자인·아이디어 등 특정 카테고리만 수집하나? | F2-1, F3-1 | 과학/공학(35)·기획/아이디어(28) 카테고리만 수집. 링커리어에 IT/소프트웨어 카테고리가 따로 없어 개발 대회는 주로 이 둘에 있음. 창업·학술·디자인·게임 등은 제외 | 결정됨 |
 | Q-16 | 소셜 로그인 콜백이 서비스 JWT를 클라이언트에 어떻게 전달하나? (JSON 응답 / 프론트로 리다이렉트 / 프론트가 code를 POST) | F1-6 (ADR-0004) | 콜백이 JSON으로 응답. 프론트엔드가 생기면 리다이렉트 방식을 다시 검토 | 결정됨 |
-| Q-17 | 로그아웃 시 Access Token 블랙리스트 저장소는? | F1-5 (ADR-0002) | Refresh와 같은 Redis에 `blacklist:{jti}`를 Access 남은 만료만큼 TTL로 저장 | 열림 |
+| Q-17 | 로그아웃 시 Access Token 블랙리스트 저장소는? | F1-5 (ADR-0002) | Refresh와 같은 Redis에 `blacklist:{jti}`를 Access 남은 만료만큼 TTL로 저장 (사용자 결정) | 결정됨 |
