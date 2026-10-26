@@ -1,0 +1,38 @@
+name: comp
+
+# 로컬 개발용. 다른 로컬 프로젝트와 겹치지 않게 호스트 포트를 기본값에서 옮겼다.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-contest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-contest}
+      POSTGRES_DB: ${POSTGRES_DB:-contest}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]  # Refresh Token 저장소 (Q-4), 재시작해도 유지
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
