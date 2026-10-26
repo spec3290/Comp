@@ -124,3 +124,32 @@ def test_access_without_session_claim_is_rejected(
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "TOKEN_INVALID"
+
+
+@pytest.mark.feature("F1-5")
+def test_access_issued_before_refresh_is_rejected_after_logout(
+    client: TestClient, protected: TestClient
+) -> None:
+    """재발급 전 Access 는 jti 가 달라 블랙리스트에 없지만 같은 세션이라 함께 막힌다."""
+    first = login(client)
+    rotated = client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).json()
+
+    _logout(client, rotated["access_token"])
+    response = protected.get("/protected", headers=bearer(first["access_token"]))
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "TOKEN_INVALID"
+
+
+@pytest.mark.feature("F1-4")
+def test_access_of_family_revoked_by_reuse_is_rejected(
+    client: TestClient, protected: TestClient
+) -> None:
+    """Refresh 재사용 탐지로 세션이 폐기되면 그 세션의 Access 도 바로 막힌다."""
+    first = login(client)
+    rotated = client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).json()
+    client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]})  # 재사용
+
+    response = protected.get("/protected", headers=bearer(rotated["access_token"]))
+
+    assert response.status_code == 401
