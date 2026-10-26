@@ -8,6 +8,7 @@ from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import fakeredis
+import httpx
 import jwt
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,14 @@ from sqlalchemy.pool import StaticPool
 from app.auth.models import User
 from app.auth.oauth import OAuthFailedError, OAuthIdentity
 from app.auth.repository import RefreshTokenStore, UserRepository
-from app.auth.service import JWT_ALGORITHM, AuthService, TokenIssuer, get_auth_service
+from app.auth.service import (
+    JWT_ALGORITHM,
+    AuthService,
+    TokenIssuer,
+    build_providers,
+    get_auth_service,
+)
+from app.core.config import Settings
 from app.core.sql import Base
 from app.core.time import now_kst
 from app.main import app
@@ -33,8 +41,9 @@ class FakeProvider:
 
     name = "google"
 
-    def __init__(self, codes: dict[str, str]) -> None:
+    def __init__(self, codes: dict[str, str], redirect_uri: str = "http://testserver/cb") -> None:
         self.codes = codes
+        self.redirect_uri = redirect_uri
 
     def authorization_url(self, state: str) -> str:
         return f"https://accounts.example.com/auth?state={state}"
@@ -106,6 +115,39 @@ def test_login_redirects_to_provider_with_state_cookie(client: TestClient) -> No
     assert "HttpOnly" in cookie
     assert "Path=/auth" in cookie
     assert "SameSite=lax" in cookie
+
+
+@pytest.mark.feature("F1-6")
+def test_state_cookie_is_secure_when_callback_is_https(
+    session: Session, redis: fakeredis.FakeRedis
+) -> None:
+    issuer = TokenIssuer(RefreshTokenStore(redis), SECRET, ACCESS_TTL, REFRESH_TTL)
+    provider = FakeProvider({}, redirect_uri="https://api.example.com/auth/google/callback")
+    service = AuthService({"google": provider}, UserRepository(session), issuer)
+    app.dependency_overrides[get_auth_service] = lambda: service
+    try:
+        response = TestClient(app).get("/auth/google/login", follow_redirects=False)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "Secure" in response.headers["set-cookie"]
+
+
+@pytest.mark.feature("F1-6")
+@pytest.mark.parametrize(
+    ("client_id", "client_secret", "expected"),
+    [("id", "secret", ["google"]), ("", "secret", []), ("id", "", [])],
+    ids=["configured", "no-client-id", "no-client-secret"],
+)
+def test_only_configured_providers_are_registered(
+    client_id: str, client_secret: str, expected: list[str]
+) -> None:
+    settings = Settings(google_client_id=client_id, google_client_secret=client_secret)
+
+    with httpx.Client() as http:
+        providers = build_providers(settings, http)
+
+    assert list(providers) == expected
 
 
 @pytest.mark.feature("F1-6")
