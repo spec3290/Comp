@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import String
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db import AwareDateTime, Base
+from app.core.sql import AwareDateTime, Base
 
 
 class Bookmark(Base):
@@ -18,6 +18,9 @@ class Bookmark(Base):
 
     __tablename__ = "bookmarks"
 
-    user_id: Mapped[int] = mapped_column(primary_key=True)
+    # 탈퇴(F1-8)하면 회원과 함께 지워진다
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
     contest_id: Mapped[str] = mapped_column(String(24), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime())

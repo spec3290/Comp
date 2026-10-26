@@ -5,7 +5,7 @@
 ## 프로젝트
 
 여러 사이트에 흩어진 대회를 수집·중복 제거·자격 분류해 보여 주는 백엔드.
-스택: Python 3.13+, uv, FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL(메인 DB), MongoDB·pymongo(대회 데이터·벡터), PyJWT, httpx, pytest. 저장소 분담은 [ADR-0008](docs/decisions.md).
+스택: Python 3.13+, uv, FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL(메인 DB), MongoDB·pymongo(대회 데이터·벡터), Redis·redis-py(Refresh Token), PyJWT, httpx, pytest. 저장소 분담은 [ADR-0008](docs/decisions.md).
 현재 범위는 **1차 MVP 13개 기능**이다. 2차 이후는 구현하지 않는다.
 
 ## 하네스 구성
@@ -35,9 +35,10 @@
 app/
   main.py            # FastAPI 앱 조립, 라우터 등록
   health.py
-  core/              # config, time(KST), db, errors 등 기능 공통
+  core/              # config, time(KST), db(MongoDB), sql(PostgreSQL), kv(Redis), errors 등 기능 공통
   contests/          # router.py → service.py → repository.py, models.py, rules.py, crawlers/
   auth/              # router.py → service.py → repository.py, models.py, oauth.py
+migrations/          # Alembic (PostgreSQL 스키마)
 ```
 
 - 기능 안의 호출 방향은 `router → service → repository`. 순수 도메인 규칙(상태·D-day·중복 제거·자격 분류)은 `rules.py`에 둔다.
@@ -46,7 +47,7 @@ app/
 
 | ID | 규칙 |
 |---|---|
-| AC-1 | `app.*.rules`는 `sqlalchemy`, `pymongo`, `fastapi`, `starlette`, `httpx`, `jwt`를 import하지 않는다 |
+| AC-1 | `app.*.rules`는 `sqlalchemy`, `pymongo`, `redis`, `fastapi`, `starlette`, `httpx`, `jwt`를 import하지 않는다 |
 | AC-2 | `app.*.router`는 `app.*.repository`를 직접 import하지 않는다 (service 경유) |
 | AC-3 | `app.core`는 기능 패키지(`app.contests`, `app.auth`)를 import하지 않는다 |
 

@@ -8,3 +8,8 @@ KST = ZoneInfo("Asia/Seoul")
 
 def now_kst() -> datetime:
     return datetime.now(KST)
+
+
+def to_kst(value: datetime) -> datetime:
+    """DB 가 돌려준 tz-aware 시각을 KST 로 바꾼다 (PostgreSQL 은 세션 시간대로 돌려준다)."""
+    return value.astimezone(KST)

@@ -28,13 +28,6 @@ class BadRequestError(AppError):
     code = "VALIDATION_ERROR"
 
 
-class UnauthorizedError(AppError):
-    """만료·위조·누락 토큰은 모두 401 (ADR-0002, ADR-0004)."""
-
-    status_code = 401
-    code = "TOKEN_INVALID"
-
-
 class NotFoundError(AppError):
     status_code = 404
     code = "NOT_FOUND"

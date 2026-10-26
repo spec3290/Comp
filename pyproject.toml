@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27",
     "pymongo>=4.13",
     "tzdata>=2026.5",
+    "redis>=5",
     "psycopg[binary]>=3.2",
 ]
 
@@ -23,6 +24,7 @@ dev = [
     "mypy>=1.10",
     "import-linter>=2.0",
     "pre-commit>=3.7",
+    "fakeredis>=2.26",
 ]
 
 # ──────────────────────────────────────────────────────────────
@@ -41,6 +43,7 @@ source_modules = ["app.*.rules"]
 forbidden_modules = [
     "sqlalchemy",
     "pymongo",
+    "redis",
     "fastapi",
     "starlette",
     "httpx",

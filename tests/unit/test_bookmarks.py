@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth.dependencies import get_current_user_id
+from app.auth.service import get_token_issuer
+from app.auth.tokens import TokenIssuer
 from app.contests.models import Bookmark
 from app.contests.repository import BookmarkRepository, ContestRecord, ContestRepository
 from app.contests.router import today_kst
 from app.contests.service import BookmarkService, get_bookmark_service
-from app.core.db import Base
-from app.core.time import KST
+from app.core.sql import Base
+from app.core.time import KST, now_kst
 from app.main import app
 
 TODAY = date(2026, 10, 23)
@@ -228,3 +230,25 @@ def test_bookmark_endpoints_without_token_return_401(
 
     assert res.status_code == 401
     assert res.json()["error"]["code"] == "TOKEN_INVALID"
+
+
+@pytest.mark.feature("F2-7")
+def test_bookmark_with_real_access_token(service: BookmarkService, issuer: TokenIssuer) -> None:
+    """인증 override 없이 F1-4 토큰 검증을 그대로 거친다. 로그아웃한 토큰은 거절된다."""
+    app.dependency_overrides[get_bookmark_service] = lambda: service
+    app.dependency_overrides[get_token_issuer] = lambda: issuer
+    app.dependency_overrides[today_kst] = lambda: TODAY
+    access = issuer.issue(USER, now_kst()).access_token
+    headers = {"Authorization": f"Bearer {access}"}
+    try:
+        api = TestClient(app)
+        saved = api.put("/contests/open/bookmark", headers=headers)
+        listed = api.get("/users/me/bookmarks", headers=headers).json()
+        issuer.revoke_session(issuer.authenticate(access), now_kst())  # 로그아웃
+        after_logout = api.get("/users/me/bookmarks", headers=headers)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert saved.status_code == 204
+    assert [item["id"] for item in listed["items"]] == ["open"]
+    assert after_logout.status_code == 401

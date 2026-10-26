@@ -3,16 +3,20 @@
 수집: 소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만
 남기며, 다른 소스는 계속 진행한다. 마감 3일이 지난 대회는 지운다 (Q-3).
 조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다.
-저장: 마감된 대회는 새로 저장할 수 없다 (Q-16). 목록에서는 삭제된 대회를 건너뛴다.
+저장: 마감된 대회는 새로 저장할 수 없다 (Q-18). 목록에서는 삭제된 대회를 건너뛴다.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Annotated
+
+from fastapi import Depends
+from sqlalchemy.orm import Session
 
 from app.contests.crawlers.base import ContestSource
 from app.contests.repository import (
@@ -22,8 +26,9 @@ from app.contests.repository import (
     SaveOutcome,
 )
 from app.contests.rules import ApplyPeriod, ContestQuery, ContestStatus, merge_key, purge_cutoff
-from app.core.db import get_database, get_sessionmaker
+from app.core.db import get_database
 from app.core.errors import ContestClosedError, NotFoundError
+from app.core.sql import get_session
 from app.core.time import now_kst
 
 logger = logging.getLogger(__name__)
@@ -163,6 +168,5 @@ class BookmarkService:
         )
 
 
-def get_bookmark_service() -> Iterator[BookmarkService]:
-    with get_sessionmaker()() as session:
-        yield BookmarkService(BookmarkRepository(session), ContestRepository(get_database()))
+def get_bookmark_service(session: Annotated[Session, Depends(get_session)]) -> BookmarkService:
+    return BookmarkService(BookmarkRepository(session), ContestRepository(get_database()))
