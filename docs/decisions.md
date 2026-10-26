@@ -45,7 +45,7 @@
 - **결정**:
   - 인증은 `Authorization: Bearer <access_token>`. 만료·위조·블랙리스트·이미 회전된 Refresh는 모두 **401**이고 `error.code`로 `TOKEN_EXPIRED` / `TOKEN_INVALID`를 구분한다.
   - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
-  - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애는 502 `OAUTH_UNAVAILABLE`, 지원하지 않는 제공자는 404 `NOT_FOUND`.
+  - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 502 `OAUTH_UNAVAILABLE`, 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
     - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`. 자격 파라미터(`education` 등)와 `eligibility_check_needed`는 F3-1·F3-3에서 추가.
