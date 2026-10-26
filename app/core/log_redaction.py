@@ -6,14 +6,22 @@ uvicorn 접속 로그는 쿼리 문자열을 그대로 남겨서 OAuth 콜백의
 
 import logging
 import re
+from urllib.parse import unquote_plus
 
-_SENSITIVE_QUERY = re.compile(r"\b(code|state|access_token|refresh_token|id_token)=[^&\s]*")
-_MASK = r"\1=***"
+_SENSITIVE_NAMES = frozenset({"code", "state", "access_token", "refresh_token", "id_token"})
+_QUERY_PARAM = re.compile(r"([?&])([^=&\s]*)=([^&\s]*)")
 _ACCESS_LOGGER = "uvicorn.access"
 
 
+def _mask(match: re.Match[str]) -> str:
+    # 접속 로그는 원본 쿼리를 남기므로 `%63ode=` 처럼 인코딩한 이름도 풀어서 확인한다
+    if unquote_plus(match.group(2)).lower() not in _SENSITIVE_NAMES:
+        return match.group(0)
+    return f"{match.group(1)}{match.group(2)}=***"
+
+
 def redact(text: str) -> str:
-    return _SENSITIVE_QUERY.sub(_MASK, text)
+    return _QUERY_PARAM.sub(_mask, text)
 
 
 class RedactQueryFilter(logging.Filter):

@@ -120,7 +120,8 @@ class GoogleOAuth:
         except httpx.HTTPError as exc:
             logger.warning("Google 요청 실패: %s %s (%s)", method, url, type(exc).__name__)
             raise OAuthUnavailableError("Google 로그인 서버에 연결할 수 없습니다.") from exc
-        if response.status_code >= 500:
+        if response.status_code == 429 or response.status_code >= 500:
+            # 429 는 코드 거절이 아니라 일시적 요청 제한이라 제공자 장애로 본다
             logger.warning("Google 서버 오류: %s %s → %d", method, url, response.status_code)
             raise OAuthUnavailableError("Google 로그인 서버에 오류가 발생했습니다.")
         if response.status_code >= 400:
