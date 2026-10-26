@@ -77,7 +77,9 @@ class TokenIssuer:
         refresh = self._encode(
             "refresh", user_id, refresh_jti, now, self._refresh_ttl, {"fam": family}
         )
-        self._store.save(refresh_jti, user_id, family, self._refresh_ttl)
+        if not self._store.save(refresh_jti, user_id, family, self._refresh_ttl):
+            # 재발급 도중 같은 family 가 재사용 탐지로 폐기됐다
+            raise TokenInvalidError("이미 사용된 토큰입니다. 다시 로그인해 주세요.")
         return IssuedTokens(
             access_token=access,
             refresh_token=refresh,
@@ -119,7 +121,7 @@ class TokenIssuer:
         if record is None or record.user_id != claims.user_id:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")
         if record.reused:
-            self._store.revoke_family(record.family_id)
+            self._store.revoke_family(record.family_id, self._refresh_ttl)
             logger.warning("회전된 Refresh 재사용 감지, family 폐기: user_id=%d", record.user_id)
             raise TokenInvalidError("이미 사용된 토큰입니다. 다시 로그인해 주세요.")
         return record
