@@ -1,4 +1,4 @@
-"""소셜 로그인 API (F1-6). 콜백은 서비스 JWT 를 JSON 으로 돌려준다 (Q-16)."""
+"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth.schemas import TokenOut
+from app.auth.schemas import LoginOut, RefreshIn, TokenOut
 from app.auth.service import AuthService, get_auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -34,7 +34,7 @@ def login(provider: str, service: Service) -> RedirectResponse:
     return response
 
 
-@router.get("/{provider}/callback", response_model=TokenOut)
+@router.get("/{provider}/callback", response_model=LoginOut)
 def callback(
     provider: str,
     response: Response,
@@ -42,8 +42,16 @@ def callback(
     code: str | None = None,
     state: str | None = None,
     oauth_state: Annotated[str | None, Cookie()] = None,
-) -> TokenOut:
+) -> LoginOut:
     result = service.complete_login(provider, code, state, oauth_state)
     response.delete_cookie(STATE_COOKIE, path="/auth")  # state 는 한 번만 쓴다
     response.headers["Cache-Control"] = "no-store"  # 본문에 토큰이 있어 캐시하지 않는다
-    return TokenOut.from_result(result)
+    return LoginOut.from_result(result)
+
+
+@router.post("/refresh", response_model=TokenOut)
+def refresh(body: RefreshIn, response: Response, service: Service) -> TokenOut:
+    """Refresh 로 새 토큰 쌍을 받는다. 보낸 Refresh 는 더 이상 쓸 수 없다 (회전)."""
+    tokens = service.refresh(body.refresh_token)
+    response.headers["Cache-Control"] = "no-store"
+    return TokenOut.from_tokens(tokens)

@@ -30,7 +30,7 @@
 
 ### ADR-0002 JWT와 Refresh Token 회전 (채택)
 - **배경**: F1-4/F1-5가 서비스 자체 JWT, Refresh 회전, 만료·위조 401, 로그아웃 시 Access 블랙리스트를 요구한다.
-- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`type`/`iat`/`exp`, HS256). Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401. 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트 저장소는 Q-17.
+- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`type`/`iat`/`exp`, HS256). Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 로그아웃은 Refresh 삭제 + Access `jti`를 만료 시점까지 블랙리스트. 블랙리스트 저장소는 Q-17.
 - **대안**: 세션 쿠키(명세가 JWT를 명시), Refresh 비회전(탈취 탐지가 어려움).
 - **결과**: 탈취 탐지와 즉시 로그아웃을 얻는다. 요청마다 블랙리스트 조회 비용과 정리 작업이 생긴다. Refresh 저장소가 Redis라 Redis가 내려가면 로그인·재발급이 실패한다.
 
@@ -43,7 +43,8 @@
 ### ADR-0004 API 규약
 - **배경**: 엔드포인트가 늘기 전에 에러·인증·페이지네이션 형태를 하나로 고정한다.
 - **결정**:
-  - 인증은 `Authorization: Bearer <access_token>`. 만료·위조·블랙리스트·이미 회전된 Refresh는 모두 **401**이고 `error.code`로 `TOKEN_EXPIRED` / `TOKEN_INVALID`를 구분한다.
+  - 인증은 `Authorization: Bearer <access_token>`. 만료·위조·블랙리스트·이미 회전된 Refresh는 모두 **401**이고 `error.code`로 `TOKEN_EXPIRED` / `TOKEN_INVALID`를 구분한다. 헤더가 없거나 Bearer가 아니면 401 `TOKEN_INVALID`. Access 자리에 Refresh를 내거나 그 반대도 `TOKEN_INVALID`(`type` 클레임).
+  - 재발급(F1-4): `POST /auth/refresh` 본문 `{ "refresh_token": "..." }` → `{ access_token, refresh_token, token_type, expires_in }`. 탈퇴한 회원의 Refresh는 `TOKEN_INVALID`.
   - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
   - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 502 `OAUTH_UNAVAILABLE`, 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
@@ -55,7 +56,7 @@
 | 기능 | 메서드·경로 | 인증 |
 |---|---|---|
 | F1-6 | `GET /auth/{provider}/login`, `GET /auth/{provider}/callback` (`provider`: google/kakao) | 없음 |
-| F1-4 | `POST /auth/refresh` | Refresh |
+| F1-4 | `POST /auth/refresh` (본문 `refresh_token`) | Refresh |
 | F1-5 | `POST /auth/logout` | Access |
 | F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
 | F1-8 | `DELETE /users/me` | Access |
