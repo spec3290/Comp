@@ -44,6 +44,7 @@ def test_new_user_me_shows_empty_profile_and_needs_onboarding(client: TestClient
     assert body["nickname"] is None and body["school_type"] is None and body["grade"] is None
     assert body["interest_fields"] == []
     assert "provider_id" not in body  # 제공자 식별자는 내보내지 않는다
+    assert body["created_at"].endswith("+09:00")  # KST 로 응답한다
 
 
 @pytest.mark.feature("F1-7")
