@@ -233,3 +233,19 @@ def test_refresh_token_cannot_be_used_as_access(protected: TestClient, issuer: T
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "TOKEN_INVALID"
+
+
+@pytest.mark.feature("F1-4")
+@pytest.mark.parametrize("secret", ["", "dev-only-secret", "x" * 31])
+def test_short_jwt_secret_is_rejected(redis: fakeredis.FakeRedis, secret: str) -> None:
+    with pytest.raises(ValueError, match="32"):
+        TokenIssuer(RefreshTokenStore(redis), secret, timedelta(minutes=15), REFRESH_TTL)
+
+
+@pytest.mark.feature("F1-4")
+def test_refresh_response_is_not_cached(client: TestClient) -> None:
+    token = login(client)["refresh_token"]
+
+    response = client.post("/auth/refresh", json={"refresh_token": token})
+
+    assert response.headers["cache-control"] == "no-store"
