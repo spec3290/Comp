@@ -136,6 +136,17 @@ def test_get_by_id_and_unknown_ids(seeded: ContestRepository) -> None:
     assert seeded.get("0" * 24) is None
 
 
+@pytest.mark.feature("F2-7")
+def test_get_many_skips_unknown_and_invalid_ids(seeded: ContestRepository) -> None:
+    records, _ = seeded.find(ContestQuery(size=2), TODAY)
+    ids = [r.id for r in records]
+
+    found = seeded.get_many([*ids, "0" * 24, "not-an-object-id"])
+
+    assert sorted(found) == sorted(ids)
+    assert seeded.get_many([]) == {}
+
+
 @pytest.mark.feature("F2-3")
 def test_delete_closed_before_keeps_three_days(seeded: ContestRepository) -> None:
     assert seeded.delete_closed_before(date(2026, 10, 20)) == 1  # 10-19 마감만 삭제

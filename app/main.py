@@ -3,8 +3,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.contests.router import me_router as my_contests_router
 from app.contests.router import router as contests_router
-from app.core.db import close_client
+from app.core.db import close_client, dispose_engine
 from app.core.errors import install_error_handlers
 from app.health import router as health_router
 
@@ -13,6 +14,7 @@ from app.health import router as health_router
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     close_client()
+    dispose_engine()
 
 
 def create_app() -> FastAPI:
@@ -20,6 +22,7 @@ def create_app() -> FastAPI:
     install_error_handlers(application)
     application.include_router(health_router)
     application.include_router(contests_router)
+    application.include_router(my_contests_router)
     return application
 
 
