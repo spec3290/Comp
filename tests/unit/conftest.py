@@ -11,7 +11,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.auth.repository import TokenStore, UserRepository
-from app.auth.service import AuthService, CurrentToken, get_auth_service, get_token_issuer
+from app.auth.service import (
+    AuthService,
+    CurrentToken,
+    UserService,
+    get_auth_service,
+    get_token_issuer,
+    get_user_service,
+)
 from app.auth.tokens import TokenIssuer
 from app.core.errors import install_error_handlers
 from app.core.sql import Base
@@ -49,6 +56,7 @@ def client(session: Session, issuer: TokenIssuer) -> Iterator[TestClient]:
     )
     app.dependency_overrides[get_auth_service] = lambda: service
     app.dependency_overrides[get_token_issuer] = lambda: issuer
+    app.dependency_overrides[get_user_service] = lambda: UserService(UserRepository(session))
     yield TestClient(app)
     app.dependency_overrides.clear()
 
