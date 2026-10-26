@@ -45,10 +45,13 @@ def callback(
 ) -> LoginOut:
     result = service.complete_login(provider, code, state, oauth_state)
     response.delete_cookie(STATE_COOKIE, path="/auth")  # state 는 한 번만 쓴다
+    response.headers["Cache-Control"] = "no-store"  # 본문에 토큰이 있어 캐시하지 않는다
     return LoginOut.from_result(result)
 
 
 @router.post("/refresh", response_model=TokenOut)
-def refresh(body: RefreshIn, service: Service) -> TokenOut:
+def refresh(body: RefreshIn, response: Response, service: Service) -> TokenOut:
     """Refresh 로 새 토큰 쌍을 받는다. 보낸 Refresh 는 더 이상 쓸 수 없다 (회전)."""
-    return TokenOut.from_tokens(service.refresh(body.refresh_token))
+    tokens = service.refresh(body.refresh_token)
+    response.headers["Cache-Control"] = "no-store"
+    return TokenOut.from_tokens(tokens)

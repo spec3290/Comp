@@ -13,7 +13,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# ConfigParser 보간 때문에 URL 인코딩된 비밀번호의 `%` 를 `%%` 로 바꿔 넣는다
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

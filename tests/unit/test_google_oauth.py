@@ -80,6 +80,7 @@ def test_rejected_code_raises_oauth_failed() -> None:
     "handler",
     [
         lambda _: httpx.Response(503),
+        lambda _: httpx.Response(429),
         lambda _: httpx.Response(200, text="<html>점검 중</html>"),
         lambda _: httpx.Response(200, json={"token_type": "Bearer"}),  # access_token 없음
         lambda r: (
@@ -88,7 +89,7 @@ def test_rejected_code_raises_oauth_failed() -> None:
             else httpx.Response(200, json={})  # sub 없음
         ),
     ],
-    ids=["server-error", "not-json", "no-access-token", "no-subject"],
+    ids=["server-error", "rate-limited", "not-json", "no-access-token", "no-subject"],
 )
 def test_broken_google_response_raises_unavailable(handler: Handler) -> None:
     with pytest.raises(OAuthUnavailableError):
