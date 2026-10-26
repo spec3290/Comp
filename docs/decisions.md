@@ -45,6 +45,7 @@
 - **결정**:
   - 인증은 `Authorization: Bearer <access_token>`. 만료·위조·블랙리스트·이미 회전된 Refresh는 모두 **401**이고 `error.code`로 `TOKEN_EXPIRED` / `TOKEN_INVALID`를 구분한다. 헤더가 없거나 Bearer가 아니면 401 `TOKEN_INVALID`. Access 자리에 Refresh를 내거나 그 반대도 `TOKEN_INVALID`(`type` 클레임).
   - 재발급(F1-4): `POST /auth/refresh` 본문 `{ "refresh_token": "..." }` → `{ access_token, refresh_token, token_type, expires_in }`. 탈퇴한 회원의 Refresh는 `TOKEN_INVALID`.
+  - 내 정보(F1-7): `GET /users/me` → `{ id, provider, nickname, grade, school_type, interest_fields, needs_onboarding, created_at }` (`provider_id`는 내보내지 않음). `PUT /users/me/profile` 본문 `{ nickname, grade?, school_type, interest_fields }`(전체 교체, 응답은 `GET /users/me`와 같음). 값이 규칙(Q-5)을 어기면 400 `VALIDATION_ERROR`, 닉네임이 다른 회원과 겹치면 409 `NICKNAME_TAKEN`. `interest_fields`는 어휘 정의 순서로 정렬해 돌려준다.
   - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
   - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 502 `OAUTH_UNAVAILABLE`, 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
@@ -73,8 +74,8 @@
 
 | 테이블 | 핵심 컬럼·제약 |
 |---|---|
-| users | id, provider, provider_id, nickname, grade, school_type, created_at. `UNIQUE(provider, provider_id)`, 프로필 미설정이면 nickname NULL |
-| user_interest_fields | user_id, field |
+| users | id, provider, provider_id, nickname, grade(smallint), school_type, created_at. `UNIQUE(provider, provider_id)`, `UNIQUE(nickname)`(NULL 여럿 허용), 프로필 미설정이면 nickname NULL |
+| user_interest_fields | `PK(user_id, field)`, user_id는 users FK `ON DELETE CASCADE` |
 | refresh_tokens (Redis) | 테이블 없이 `refresh:{jti}` 해시: user_id, family_id. 만료는 Redis TTL (Q-4) |
 | access_token_blacklist (Redis) | 테이블 없이 `blacklist:{jti}`. 만료는 Redis TTL이라 정리 작업이 없다 (Q-17) |
 | contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
@@ -85,7 +86,7 @@
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`로 만들었다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -113,7 +114,7 @@
 | Q-2 | 중복 제거에서 제목 정규화(공백·특수문자·대소문자·접두어) 수준과 대표 값 선택 규칙은? | F2-2 | 공백·특수문자 제거 후 소문자 비교, 먼저 수집된 소스를 대표로. 구현은 이 기본값 + 맨 앞 `[...]` 접두어 제거로 동작 중 | 열림 |
 | Q-3 | 마감 대회를 상태 필터 '마감'으로 조회할 수 있어야 하나? | F2-3 | 기본 목록에서 제외하고 `status=closed`로 조회 가능. 접수 마감 3일이 지나면(마감일 < 오늘-3일) 수집 실행 때 하드 삭제한다 | 결정됨 |
 | Q-4 | Access/Refresh 만료 시간과 Refresh Token 저장소는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일. Refresh Token은 Redis에 저장 (사용자 지정). 블랙리스트 저장소는 Q-17로 분리 | 결정됨 |
-| Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 2~12자, 중복 불가. 학교 유형: 중/고/대학교/기타 | 열림 |
+| Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 닉네임은 앞뒤 공백 제외 2~12자(NFC, 제어 문자 금지), 중복 불가. 학교 유형: 중학교/고등학교/대학교/기타. 학년 1~6, 선택 입력. 관심 분야: 개발/AI/보안/디자인/아이디어 복수 선택 (사용자가 기본값 승인) | 결정됨 |
 | Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 소스에 값이 있으면 크롤링한다(DACON은 일정 HTML의 '참가(신청) 기간', 없으면 대회 기간). 그래도 시작일이 없으면 '접수 중'으로 간주 | 결정됨 |
 | Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 로컬 삭제는 진행, revoke 실패는 로그 + 재시도 큐는 2차 | 열림 |
 | Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 사용자가 초안 제공, 에이전트가 설정 파일로 구성 | 열림 |
