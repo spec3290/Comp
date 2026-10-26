@@ -141,7 +141,9 @@ def build_providers(settings: Settings, client: httpx.Client) -> dict[str, OAuth
     return providers
 
 
+@lru_cache
 def get_token_issuer() -> TokenIssuer:
+    """프로세스당 하나. 앱 시작 때 만들어 JWT_SECRET 이 잘못됐으면 바로 실패한다."""
     settings = get_settings()
     return TokenIssuer(
         store=TokenStore(get_redis()),

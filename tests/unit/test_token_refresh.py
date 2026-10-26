@@ -9,10 +9,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import service as service_module
 from app.auth.models import User
 from app.auth.repository import TokenStore
-from app.auth.tokens import JWT_ALGORITHM, TokenIssuer
+from app.auth.service import get_token_issuer
+from app.auth.tokens import JWT_ALGORITHM, TokenInvalidError, TokenIssuer
+from app.core.config import Settings
 from app.core.time import now_kst
+from app.main import app
 from tests.unit.auth_support import REFRESH_TTL, bearer, claims, login
 
 
@@ -232,3 +236,40 @@ def test_refresh_response_is_not_cached(client: TestClient) -> None:
     response = client.post("/auth/refresh", json={"refresh_token": token})
 
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.feature("F1-4")
+def test_refresh_racing_with_reuse_cannot_survive_in_revoked_family(
+    client: TestClient, issuer: TokenIssuer, redis: fakeredis.FakeRedis
+) -> None:
+    token = login(client)["refresh_token"]
+    assert isinstance(token, str)
+
+    first = issuer.rotate(token)  # 요청 A: 처음 사용, 아직 새 토큰을 발급하기 전
+    with pytest.raises(TokenInvalidError):
+        issuer.rotate(token)  # 요청 B: 재사용 탐지 → family 폐기
+
+    with pytest.raises(TokenInvalidError):  # 요청 A 가 이어서 발급하려 해도 거절된다
+        issuer.issue(first.user_id, now_kst(), family_id=first.family_id)
+    assert not redis.smembers(f"refresh_family:{first.family_id}")
+
+
+@pytest.mark.feature("F1-4")
+def test_new_login_family_is_not_affected_by_revoked_family(
+    redis: fakeredis.FakeRedis,
+) -> None:
+    store = TokenStore(redis)
+    store.revoke_family("old-family", REFRESH_TTL)
+
+    assert store.save("jti-new", 1, "new-family", REFRESH_TTL) is True
+    assert store.save("jti-old", 1, "old-family", REFRESH_TTL) is False
+
+
+@pytest.mark.feature("F1-4")
+def test_app_refuses_to_start_with_short_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service_module, "get_settings", lambda: Settings(jwt_secret="short"))
+    get_token_issuer.cache_clear()
+
+    with pytest.raises(ValueError, match="32"), TestClient(app):
+        pass
+    get_token_issuer.cache_clear()
