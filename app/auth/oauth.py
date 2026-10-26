@@ -41,6 +41,11 @@ class OAuthIdentity:
 class OAuthProvider(Protocol):
     name: str
 
+    @property
+    def redirect_uri(self) -> str:
+        """제공자 콘솔에 등록한 콜백 주소."""
+        ...
+
     def authorization_url(self, state: str) -> str: ...
 
     def exchange_code(self, code: str) -> OAuthIdentity: ...
@@ -64,6 +69,10 @@ class GoogleOAuth:
     def __init__(self, config: GoogleConfig, client: httpx.Client) -> None:
         self._config = config
         self._client = client
+
+    @property
+    def redirect_uri(self) -> str:
+        return self._config.redirect_uri
 
     def authorization_url(self, state: str) -> str:
         params = {
@@ -118,7 +127,10 @@ class GoogleOAuth:
             # 본문에 민감 정보는 없지만 코드가 섞일 수 있어 상태 코드만 남긴다
             logger.info("Google 이 요청을 거절: %s %s → %d", method, url, response.status_code)
             raise OAuthFailedError("Google 로그인에 실패했습니다. 다시 시도해 주세요.")
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise OAuthUnavailableError("Google 응답 형식이 올바르지 않습니다.") from exc
         if not isinstance(body, dict):
             raise OAuthUnavailableError("Google 응답 형식이 올바르지 않습니다.")
         return body

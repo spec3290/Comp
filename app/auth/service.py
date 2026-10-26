@@ -44,6 +44,7 @@ class OAuthStateMismatchError(AppError):
 class LoginStart:
     redirect_url: str
     state: str
+    secure_cookie: bool
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,12 @@ class AuthService:
     def start_login(self, provider_name: str) -> LoginStart:
         provider = self._provider(provider_name)
         state = secrets.token_urlsafe(32)
-        return LoginStart(redirect_url=provider.authorization_url(state), state=state)
+        return LoginStart(
+            redirect_url=provider.authorization_url(state),
+            state=state,
+            # state 쿠키는 콜백 주소로 돌아올 때 실려야 하므로 프록시 뒤에서도 콜백 scheme 을 따른다
+            secure_cookie=provider.redirect_uri.startswith("https://"),
+        )
 
     def complete_login(
         self,
@@ -149,7 +155,7 @@ class AuthService:
     def _provider(self, name: str) -> OAuthProvider:
         provider = self._providers.get(name)
         if provider is None:
-            raise NotFoundError(f"지원하지 않는 로그인 제공자입니다: {name}")
+            raise NotFoundError(f"지원하지 않거나 설정되지 않은 로그인 제공자입니다: {name}")
         return provider
 
 
@@ -166,12 +172,16 @@ def close_http_client() -> None:
 
 
 def build_providers(settings: Settings, client: httpx.Client) -> dict[str, OAuthProvider]:
-    google = GoogleConfig(
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-        redirect_uri=settings.google_redirect_uri,
-    )
-    return {GoogleOAuth.name: GoogleOAuth(google, client)}
+    """클라이언트 ID·시크릿이 있는 제공자만 등록한다. 없으면 제공자 화면 대신 404 로 바로 알린다."""
+    providers: dict[str, OAuthProvider] = {}
+    if settings.google_client_id and settings.google_client_secret:
+        google = GoogleConfig(
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            redirect_uri=settings.google_redirect_uri,
+        )
+        providers[GoogleOAuth.name] = GoogleOAuth(google, client)
+    return providers
 
 
 def get_auth_service(session: Annotated[Session, Depends(get_session)]) -> AuthService:
