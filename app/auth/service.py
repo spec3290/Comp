@@ -1,4 +1,4 @@
-"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4).
+"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5).
 
 로그인은 두 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
 쿠키로 보관한 state 와 비교해 CSRF 를 막은 뒤 인가 코드를 회원 식별자로 바꾼다.
@@ -22,7 +22,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.auth.oauth import GoogleConfig, GoogleOAuth, OAuthFailedError, OAuthProvider
-from app.auth.repository import RefreshTokenStore, UserRepository
+from app.auth.repository import TokenStore, UserRepository
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
 from app.core.db import get_settings
@@ -100,6 +100,10 @@ class AuthService:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 탈퇴한 회원 (F1-8)
         return self._issuer.issue(record.user_id, now_kst(), family_id=record.family_id)
 
+    def logout(self, access: TokenClaims) -> None:
+        self._issuer.revoke_session(access, now_kst())
+        logger.info("로그아웃: user_id=%d", access.user_id)
+
     def _provider(self, name: str) -> OAuthProvider:
         provider = self._providers.get(name)
         if provider is None:
@@ -135,7 +139,7 @@ def build_providers(settings: Settings, client: httpx.Client) -> dict[str, OAuth
 def get_token_issuer() -> TokenIssuer:
     settings = get_settings()
     return TokenIssuer(
-        store=RefreshTokenStore(get_redis()),
+        store=TokenStore(get_redis()),
         secret=settings.jwt_secret,
         access_ttl=timedelta(minutes=settings.access_token_ttl_minutes),
         refresh_ttl=timedelta(days=settings.refresh_token_ttl_days),
@@ -165,7 +169,7 @@ def require_access(
     """`Authorization: Bearer <access_token>` 을 검증한다. 인증이 필요한 API 의 의존성."""
     if credentials is None:
         raise TokenInvalidError("인증이 필요합니다.")
-    return issuer.verify(credentials.credentials, "access")
+    return issuer.authenticate(credentials.credentials)
 
 
 CurrentToken = Annotated[TokenClaims, Depends(require_access)]

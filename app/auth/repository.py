@@ -1,10 +1,11 @@
-"""회원 저장소(PostgreSQL)와 Refresh Token 저장소(Redis, Q-4).
+"""회원 저장소(PostgreSQL)와 토큰 저장소(Redis, Q-4·Q-17).
 
 Refresh Token 은 `refresh:{jti}` 해시에 user_id·family_id 를 담고, 만료 시각에 맞춰 Redis TTL
 로 지운다. 한 로그인에서 회전으로 이어진 토큰들(family)의 jti 는 `refresh_family:{family_id}`
 집합에 모아 한꺼번에 폐기한다 (ADR-0002).
 
 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료 때까지 재사용을 탐지한다.
+로그아웃한 Access 는 `blacklist:{jti}` 에 남은 만료 시간만큼만 둔다 (F1-5).
 """
 
 from __future__ import annotations
@@ -62,6 +63,10 @@ def _family_key(family_id: str) -> str:
     return f"refresh_family:{family_id}"
 
 
+def _blacklist_key(jti: str) -> str:
+    return f"blacklist:{jti}"
+
+
 @dataclass(frozen=True)
 class RefreshRecord:
     user_id: int
@@ -69,7 +74,7 @@ class RefreshRecord:
     reused: bool  # 이미 회전된 토큰이 다시 왔다 (탈취 의심)
 
 
-class RefreshTokenStore:
+class TokenStore:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
@@ -114,3 +119,11 @@ class RefreshTokenStore:
         family = _family_key(family_id)
         jtis = self._redis.smembers(family)
         self._redis.delete(family, *(_refresh_key(str(jti)) for jti in jtis))
+
+    def blacklist(self, jti: str, ttl: timedelta) -> None:
+        """Access 를 만료 때까지 막는다. 이미 만료됐으면 저장할 필요가 없다."""
+        if ttl.total_seconds() >= 1:
+            self._redis.set(_blacklist_key(jti), "1", ex=ttl)
+
+    def is_blacklisted(self, jti: str) -> bool:
+        return bool(self._redis.exists(_blacklist_key(jti)))

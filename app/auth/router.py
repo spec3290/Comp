@@ -1,4 +1,4 @@
-"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4)."""
+"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4), 로그아웃 (F1-5)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.responses import RedirectResponse
 
 from app.auth.schemas import LoginOut, RefreshIn, TokenOut
-from app.auth.service import AuthService, get_auth_service
+from app.auth.service import AuthService, CurrentToken, get_auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -52,3 +52,10 @@ def callback(
 def refresh(body: RefreshIn, service: Service) -> TokenOut:
     """Refresh 로 새 토큰 쌍을 받는다. 보낸 Refresh 는 더 이상 쓸 수 없다 (회전)."""
     return TokenOut.from_tokens(service.refresh(body.refresh_token))
+
+
+@router.post("/logout", status_code=204)
+def logout(token: CurrentToken, service: Service) -> Response:
+    """이 기기의 로그인을 끝낸다. 다른 기기의 로그인은 유지된다."""
+    service.logout(token)
+    return Response(status_code=204)
