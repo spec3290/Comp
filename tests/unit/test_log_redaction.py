@@ -42,6 +42,8 @@ def test_access_log_hides_oauth_code_and_state() -> None:
     ("text", "expected"),
     [
         ("/x?access_token=eyJ.a.b", "/x?access_token=***"),
+        ("/x?%63ode=secret&page=2", "/x?%63ode=***&page=2"),
+        ("/x?CODE=secret", "/x?CODE=***"),
         ("/x?refresh_token=r&id_token=i", "/x?refresh_token=***&id_token=***"),
         ("/contests?q=zipcode=1", "/contests?q=zipcode=1"),  # 단어 경계: zipcode 는 그대로
         ("/contests?page=1", "/contests?page=1"),

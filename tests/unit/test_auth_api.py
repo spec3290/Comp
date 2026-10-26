@@ -221,6 +221,26 @@ def test_refresh_token_is_stored_in_redis_until_expiry(
 
 
 @pytest.mark.feature("F1-6")
+def test_callback_response_is_not_cached(client: TestClient) -> None:
+    start = client.get("/auth/google/login", follow_redirects=False)
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+
+    response = client.get("/auth/google/callback", params={"code": "code-a", "state": state})
+
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.feature("F1-6")
+def test_non_ascii_state_returns_400_not_500(client: TestClient) -> None:
+    client.get("/auth/google/login", follow_redirects=False)
+
+    response = client.get("/auth/google/callback", params={"code": "code-a", "state": "é"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "OAUTH_STATE_MISMATCH"
+
+
+@pytest.mark.feature("F1-6")
 def test_callback_deletes_state_cookie(client: TestClient) -> None:
     start = client.get("/auth/google/login", follow_redirects=False)
     state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
