@@ -23,6 +23,7 @@ from app.core.time import KST
 logger = logging.getLogger(__name__)
 
 JWT_ALGORITHM = "HS256"
+MIN_SECRET_BYTES = 32
 TokenType = Literal["access", "refresh"]
 _REQUIRED_CLAIMS = ["sub", "jti", "type", "iat", "exp"]
 
@@ -60,6 +61,9 @@ class TokenIssuer:
         access_ttl: timedelta,
         refresh_ttl: timedelta,
     ) -> None:
+        # HS256 키가 짧으면 서명을 추측할 수 있다 (RFC 7518 3.2). 기본값·빈 값도 여기서 막힌다
+        if len(secret.encode()) < MIN_SECRET_BYTES:
+            raise ValueError(f"JWT_SECRET 은 {MIN_SECRET_BYTES}바이트 이상이어야 합니다.")
         self._store = store
         self._secret = secret
         self._access_ttl = access_ttl
