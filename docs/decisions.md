@@ -51,6 +51,8 @@
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
     - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`. 자격 파라미터(`education` 등)와 `eligibility_check_needed`는 F3-1·F3-3에서 추가.
+  - 토큰이 없는 요청도 401 `TOKEN_INVALID`다. 인증이 필요한 엔드포인트는 `app.auth.dependencies.get_current_user_id`로 사용자를 받는다.
+  - 대회 저장(F2-7): `PUT`·`DELETE /contests/{id}/bookmark`는 본문 없이 204(멱등). 없는 대회 저장은 404, 마감 대회 저장은 409 `CONTEST_CLOSED`(Q-18). `GET /users/me/bookmarks`는 `?page&size` 페이지네이션, 항목은 대회 응답 필드 + `bookmarked_at`(KST ISO 8601), 최근 저장순.
   - 대회 응답 필드: `id`, `title`, `host`, `field`, `status`(`open`/`upcoming`/`closed`, 조회 시 계산), `d_day`(마감 당일 0), `apply_start`, `apply_end`, `event_start`, `event_end`(날짜 `YYYY-MM-DD`, 없으면 null), `apply_url`, `source_url`. 상세는 `eligibility_text`, `sources`(수집 출처 목록)를 더한다.
 - **엔드포인트 초안**:
 
@@ -84,7 +86,7 @@
 | qualification_rules | id, dimension, keyword, value, enabled |
 | contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
 | crawl_runs | id, source, started_at, finished_at, status, error |
-| bookmarks | `PK(user_id, contest_id)`, created_at |
+| bookmarks | `PK(user_id, contest_id)`, created_at. user_id는 users FK `ON DELETE CASCADE` (마이그레이션 `0003`) |
 
 - **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
 
@@ -127,3 +129,4 @@
 | Q-15 | 링커리어 공모전은 분야 제한 없이(네이밍·사진·UCC 등 포함) 모두 수집하나, 개발·AI·보안·디자인·아이디어 등 특정 카테고리만 수집하나? | F2-1, F3-1 | 과학/공학(35)·기획/아이디어(28) 카테고리만 수집. 링커리어에 IT/소프트웨어 카테고리가 따로 없어 개발 대회는 주로 이 둘에 있음. 창업·학술·디자인·게임 등은 제외 | 결정됨 |
 | Q-16 | 소셜 로그인 콜백이 서비스 JWT를 클라이언트에 어떻게 전달하나? (JSON 응답 / 프론트로 리다이렉트 / 프론트가 code를 POST) | F1-6 (ADR-0004) | 콜백이 JSON으로 응답. 프론트엔드가 생기면 리다이렉트 방식을 다시 검토 | 결정됨 |
 | Q-17 | 로그아웃 시 Access Token 블랙리스트 저장소는? | F1-5 (ADR-0002) | Refresh와 같은 Redis에 `blacklist:{jti}`를 Access 남은 만료만큼 TTL로 저장 (사용자 결정) | 결정됨 |
+| Q-18 | 접수가 마감된 대회도 저장(북마크)할 수 있나? | F2-7 | 409 `CONTEST_CLOSED`로 거절한다(마감 당일까지는 허용). 해제·목록 조회는 항상 가능하고, 저장 후 마감된 대회는 목록에 `closed`로 남는다 | 결정됨 |

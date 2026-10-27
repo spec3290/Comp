@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.auth.router import router as auth_router
 from app.auth.router import users_router
 from app.auth.service import close_http_client, get_token_issuer
+from app.contests.router import me_router as my_contests_router
 from app.contests.router import router as contests_router
 from app.core.db import close_client
 from app.core.errors import install_error_handlers
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
     application.include_router(auth_router)
     application.include_router(users_router)
     application.include_router(contests_router)
+    application.include_router(my_contests_router)
     return application
 
 

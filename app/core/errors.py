@@ -33,6 +33,11 @@ class NotFoundError(AppError):
     code = "NOT_FOUND"
 
 
+class ContestClosedError(AppError):
+    status_code = 409
+    code = "CONTEST_CLOSED"
+
+
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code, content={"error": {"code": code, "message": message}}

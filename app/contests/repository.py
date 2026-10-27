@@ -1,4 +1,4 @@
-"""대회 저장소 (MongoDB `contests` 컬렉션, ADR-0008).
+"""대회 저장소 (MongoDB `contests` 컬렉션) + 북마크 저장소 (PostgreSQL `bookmarks`, ADR-0008).
 
 문서 하나가 병합된 대회 하나다. 날짜는 KST 자정 tz-aware datetime 으로 저장한다
 (BSON 에 날짜 전용 타입이 없다). 수집 출처는 `sources` 배열에 쌓고, 처음 수집한 소스가
@@ -21,8 +21,12 @@ from bson import ObjectId
 from pymongo import ASCENDING, DESCENDING
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.contests.crawlers.base import RawContest
+from app.contests.models import Bookmark
 from app.contests.rules import ContestQuery, ContestStatus, SortOrder
 from app.core.db import Document
 from app.core.time import KST
@@ -237,7 +241,52 @@ class ContestRepository:
         doc = self._contests.find_one({"_id": ObjectId(contest_id)})
         return None if doc is None else _to_record(doc)
 
+    def get_many(self, contest_ids: list[str]) -> dict[str, ContestRecord]:
+        """id 별 대회. 없는(삭제된) 대회는 결과에서 빠진다."""
+        object_ids = [ObjectId(i) for i in contest_ids if ObjectId.is_valid(i)]
+        if not object_ids:
+            return {}
+        records = map(_to_record, self._contests.find({"_id": {"$in": object_ids}}))
+        return {record.id: record for record in records}
+
     def delete_closed_before(self, cutoff: date) -> int:
         """접수 마감일이 cutoff 보다 이른 대회를 지운다 (Q-3). 지운 건수를 돌려준다."""
         result = self._contests.delete_many({"apply_end": {"$lt": _to_datetime(cutoff)}})
         return result.deleted_count
+
+
+@dataclass(frozen=True)
+class BookmarkRecord:
+    contest_id: str
+    created_at: datetime
+
+
+class BookmarkRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, user_id: int, contest_id: str, now: datetime) -> None:
+        """이미 저장돼 있으면 처음 저장한 시각을 그대로 둔다 (멱등)."""
+        if self._session.get(Bookmark, (user_id, contest_id)) is not None:
+            return
+        self._session.add(Bookmark(user_id=user_id, contest_id=contest_id, created_at=now))
+        try:
+            self._session.commit()
+        except IntegrityError:
+            # 같은 요청이 동시에 들어오면 PK 가 한쪽을 막는다. 먼저 저장한 쪽을 따른다.
+            self._session.rollback()
+
+    def remove(self, user_id: int, contest_id: str) -> None:
+        self._session.execute(
+            delete(Bookmark).where(Bookmark.user_id == user_id, Bookmark.contest_id == contest_id)
+        )
+        self._session.commit()
+
+    def list_for_user(self, user_id: int) -> list[BookmarkRecord]:
+        """최근 저장순 전체 목록."""
+        rows = self._session.scalars(
+            select(Bookmark)
+            .where(Bookmark.user_id == user_id)
+            .order_by(Bookmark.created_at.desc(), Bookmark.contest_id)
+        )
+        return [BookmarkRecord(contest_id=r.contest_id, created_at=r.created_at) for r in rows]

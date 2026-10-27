@@ -1,24 +1,35 @@
-"""대회 조회 API: 목록 (F2-3), 상세 (F2-4). 인증은 아직 없다 (ADR-0004: 선택)."""
+"""대회 API: 목록 (F2-3), 상세 (F2-4), 저장 (F2-7).
+
+목록·상세는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
+"""
 
 from __future__ import annotations
 
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 
+from app.auth.dependencies import CurrentUserId
 from app.contests.rules import DEFAULT_STATUSES, ContestQuery, ContestStatus, SortOrder
-from app.contests.schemas import ContestDetailOut, ContestPageOut
-from app.contests.service import ContestQueryService, get_query_service
+from app.contests.schemas import BookmarkPageOut, ContestDetailOut, ContestPageOut
+from app.contests.service import (
+    BookmarkService,
+    ContestQueryService,
+    get_bookmark_service,
+    get_query_service,
+)
 from app.core.errors import BadRequestError
 from app.core.time import now_kst
 
 router = APIRouter(prefix="/contests", tags=["contests"])
+me_router = APIRouter(prefix="/users/me", tags=["bookmarks"])
 
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 20
 
 Service = Annotated[ContestQueryService, Depends(get_query_service)]
+Bookmarks = Annotated[BookmarkService, Depends(get_bookmark_service)]
 
 
 def today_kst() -> date:
@@ -71,3 +82,28 @@ def list_contests(
 @router.get("/{contest_id}", response_model=ContestDetailOut)
 def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetailOut:
     return ContestDetailOut.from_view(service.get_contest(contest_id, today))
+
+
+@router.put("/{contest_id}/bookmark", status_code=status.HTTP_204_NO_CONTENT)
+def bookmark_contest(
+    contest_id: str, user_id: CurrentUserId, service: Bookmarks, today: Today
+) -> Response:
+    service.add(user_id, contest_id, today, now_kst())
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{contest_id}/bookmark", status_code=status.HTTP_204_NO_CONTENT)
+def unbookmark_contest(contest_id: str, user_id: CurrentUserId, service: Bookmarks) -> Response:
+    service.remove(user_id, contest_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@me_router.get("/bookmarks", response_model=BookmarkPageOut)
+def list_my_bookmarks(
+    user_id: CurrentUserId,
+    service: Bookmarks,
+    today: Today,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> BookmarkPageOut:
+    return BookmarkPageOut.from_page(service.list_bookmarks(user_id, today, page, size))
