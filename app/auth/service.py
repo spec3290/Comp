@@ -1,4 +1,4 @@
-"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4).
+"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5) + 내 정보·프로필 (F1-7).
 
 로그인은 두 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
 쿠키로 보관한 state 와 비교해 CSRF 를 막은 뒤 인가 코드를 회원 식별자로 바꾼다.
@@ -21,8 +21,10 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.auth.models import User
 from app.auth.oauth import GoogleConfig, GoogleOAuth, OAuthFailedError, OAuthProvider
-from app.auth.repository import RefreshTokenStore, UserRepository
+from app.auth.repository import NicknameConflictError, TokenStore, UserRepository
+from app.auth.rules import ProfileInput, ordered_fields
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
 from app.core.db import get_settings
@@ -37,6 +39,11 @@ logger = logging.getLogger(__name__)
 class OAuthStateMismatchError(AppError):
     status_code = 400
     code = "OAUTH_STATE_MISMATCH"
+
+
+class NicknameTakenError(AppError):
+    status_code = 409
+    code = "NICKNAME_TAKEN"
 
 
 @dataclass(frozen=True)
@@ -105,11 +112,43 @@ class AuthService:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 탈퇴한 회원 (F1-8)
         return self._issuer.issue(record.user_id, now_kst(), family_id=record.family_id)
 
+    def logout(self, access: TokenClaims) -> None:
+        self._issuer.revoke_session(access, now_kst())
+        logger.info("로그아웃: user_id=%d", access.user_id)
+
     def _provider(self, name: str) -> OAuthProvider:
         provider = self._providers.get(name)
         if provider is None:
             raise NotFoundError(f"지원하지 않거나 설정되지 않은 로그인 제공자입니다: {name}")
         return provider
+
+
+class UserService:
+    def __init__(self, users: UserRepository) -> None:
+        self._users = users
+
+    def get_me(self, user_id: int) -> User:
+        user = self._users.get(user_id)
+        if user is None:
+            raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 토큰은 맞지만 탈퇴한 회원 (F1-8)
+        return user
+
+    def update_profile(self, user_id: int, profile: ProfileInput) -> User:
+        """온보딩·프로필 수정. 저장하면 needs_onboarding 이 false 가 된다."""
+        user = self.get_me(user_id)
+        if self._users.nickname_taken(profile.nickname, user.id):
+            raise NicknameTakenError("이미 사용 중인 닉네임입니다.")
+        try:
+            self._users.update_profile(
+                user,
+                nickname=profile.nickname,
+                grade=profile.grade,
+                school_type=profile.school_type.value,
+                fields=[f.value for f in ordered_fields(profile.interest_fields)],
+            )
+        except NicknameConflictError as exc:
+            raise NicknameTakenError("이미 사용 중인 닉네임입니다.") from exc
+        return user
 
 
 @lru_cache
@@ -142,7 +181,7 @@ def get_token_issuer() -> TokenIssuer:
     """프로세스당 하나. 앱 시작 때 만들어 JWT_SECRET 이 잘못됐으면 바로 실패한다."""
     settings = get_settings()
     return TokenIssuer(
-        store=RefreshTokenStore(get_redis()),
+        store=TokenStore(get_redis()),
         secret=settings.jwt_secret,
         access_ttl=timedelta(minutes=settings.access_token_ttl_minutes),
         refresh_ttl=timedelta(days=settings.refresh_token_ttl_days),
@@ -162,6 +201,10 @@ def get_auth_service(
     )
 
 
+def get_user_service(session: Annotated[Session, Depends(get_session)]) -> UserService:
+    return UserService(UserRepository(session))
+
+
 _bearer = HTTPBearer(auto_error=False, description="로그인·재발급으로 받은 Access Token")
 
 
@@ -172,7 +215,7 @@ def require_access(
     """`Authorization: Bearer <access_token>` 을 검증한다. 인증이 필요한 API 의 의존성."""
     if credentials is None:
         raise TokenInvalidError("인증이 필요합니다.")
-    return issuer.verify(credentials.credentials, "access")
+    return issuer.authenticate(credentials.credentials)
 
 
 CurrentToken = Annotated[TokenClaims, Depends(require_access)]

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.auth.router import router as auth_router
+from app.auth.router import users_router
 from app.auth.service import close_http_client, get_token_issuer
 from app.contests.router import router as contests_router
 from app.core.db import close_client
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
     install_error_handlers(application)
     application.include_router(health_router)
     application.include_router(auth_router)
+    application.include_router(users_router)
     application.include_router(contests_router)
     return application
 

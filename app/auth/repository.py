@@ -1,14 +1,16 @@
-"""회원 저장소(PostgreSQL)와 Refresh Token 저장소(Redis, Q-4).
+"""회원 저장소(PostgreSQL)와 토큰 저장소(Redis, Q-4·Q-17).
 
 Refresh Token 은 `refresh:{jti}` 해시에 user_id·family_id 를 담고, 만료 시각에 맞춰 Redis TTL
 로 지운다. 한 로그인에서 회전으로 이어진 토큰들(family)의 jti 는 `refresh_family:{family_id}`
 집합에 모아 한꺼번에 폐기한다 (ADR-0002).
 
 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료 때까지 재사용을 탐지한다.
+로그아웃한 Access 는 `blacklist:{jti}` 에 남은 만료 시간만큼만 둔다 (F1-5).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -18,7 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth.models import User
+from app.auth.models import User, UserInterestField
+
+
+class NicknameConflictError(Exception):
+    """다른 회원이 이미 쓰는 닉네임이다 (UNIQUE 제약)."""
 
 
 class UserRepository:
@@ -53,6 +59,35 @@ class UserRepository:
             return existing, False
         return user, True
 
+    def nickname_taken(self, nickname: str, exclude_user_id: int) -> bool:
+        stmt = select(User.id).where(User.nickname == nickname, User.id != exclude_user_id)
+        return self._session.scalars(stmt).first() is not None
+
+    def update_profile(
+        self,
+        user: User,
+        nickname: str,
+        grade: int | None,
+        school_type: str,
+        fields: list[str],
+    ) -> None:
+        """프로필을 통째로 바꾼다. 관심 분야는 바뀐 것만 지우고 더한다.
+
+        확인과 저장 사이에 다른 회원이 같은 닉네임을 먼저 저장하면 UNIQUE 제약에 걸려
+        NicknameConflictError 가 난다.
+        """
+        user.nickname, user.grade, user.school_type = nickname, grade, school_type
+        wanted = set(fields)
+        for interest in [i for i in user.interests if i.field not in wanted]:
+            user.interests.remove(interest)
+        current = {i.field for i in user.interests}
+        user.interests.extend(UserInterestField(field=f) for f in fields if f not in current)
+        try:
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise NicknameConflictError(nickname) from exc
+
 
 def _refresh_key(jti: str) -> str:
     return f"refresh:{jti}"
@@ -60,6 +95,10 @@ def _refresh_key(jti: str) -> str:
 
 def _family_key(family_id: str) -> str:
     return f"refresh_family:{family_id}"
+
+
+def _blacklist_key(jti: str) -> str:
+    return f"blacklist:{jti}"
 
 
 def _revoked_key(family_id: str) -> str:
@@ -73,7 +112,7 @@ class RefreshRecord:
     reused: bool  # 이미 회전된 토큰이 다시 왔다 (탈취 의심)
 
 
-class RefreshTokenStore:
+class TokenStore:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
@@ -139,3 +178,20 @@ class RefreshTokenStore:
         family = _family_key(family_id)
         jtis = self._redis.smembers(family)
         self._redis.delete(family, *(_refresh_key(str(jti)) for jti in jtis))
+
+    def blacklist(self, jti: str, ttl: timedelta) -> None:
+        """Access 를 만료 때까지 막는다. 이미 만료됐으면 저장할 필요가 없다.
+
+        초 단위로 넘기면 남은 시간이 잘려 만료 직전에 토큰이 다시 통과할 수 있어서, 밀리초로
+        올림하고 시계 오차만큼 1초를 더 둔다.
+        """
+        remaining_ms = math.ceil(ttl.total_seconds() * 1000)
+        if remaining_ms > 0:
+            self._redis.set(_blacklist_key(jti), "1", px=remaining_ms + 1000)
+
+    def is_access_revoked(self, jti: str, family_id: str) -> bool:
+        """이 Access 가 블랙리스트에 있거나 세션(family)이 폐기됐다. 한 번의 EXISTS 로 본다.
+
+        세션 폐기 표식은 Refresh 만료 시간만큼 남으므로 그 세션의 어떤 Access 보다 오래 간다.
+        """
+        return bool(self._redis.exists(_blacklist_key(jti), _revoked_key(family_id)))

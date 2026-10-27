@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.repository import RefreshTokenStore, UserRepository
+from app.auth.repository import TokenStore, UserRepository
 from app.auth.service import AuthService, build_providers, get_auth_service
 from app.auth.tokens import TokenIssuer
 from app.core.config import Settings
@@ -45,7 +45,7 @@ def test_login_redirects_to_provider_with_state_cookie(client: TestClient) -> No
 def test_state_cookie_is_secure_when_callback_is_https(
     session: Session, redis: fakeredis.FakeRedis
 ) -> None:
-    issuer = TokenIssuer(RefreshTokenStore(redis), SECRET, ACCESS_TTL, REFRESH_TTL)
+    issuer = TokenIssuer(TokenStore(redis), SECRET, ACCESS_TTL, REFRESH_TTL)
     provider = FakeProvider({}, redirect_uri="https://api.example.com/auth/google/callback")
     service = AuthService({"google": provider}, UserRepository(session), issuer)
     app.dependency_overrides[get_auth_service] = lambda: service

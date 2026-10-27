@@ -1,4 +1,5 @@
-"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4)."""
+"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4), 로그아웃 (F1-5),
+내 정보·프로필 (F1-7)."""
 
 from __future__ import annotations
 
@@ -7,15 +8,23 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth.schemas import LoginOut, RefreshIn, TokenOut
-from app.auth.service import AuthService, get_auth_service
+from app.auth.schemas import LoginOut, ProfileIn, RefreshIn, TokenOut, UserOut
+from app.auth.service import (
+    AuthService,
+    CurrentToken,
+    UserService,
+    get_auth_service,
+    get_user_service,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+users_router = APIRouter(prefix="/users", tags=["users"])
 
 STATE_COOKIE = "oauth_state"
 STATE_COOKIE_MAX_AGE = 600  # 동의 화면에서 머무를 수 있는 시간(초)
 
 Service = Annotated[AuthService, Depends(get_auth_service)]
+Users = Annotated[UserService, Depends(get_user_service)]
 
 
 @router.get("/{provider}/login", status_code=302, response_class=RedirectResponse)
@@ -55,3 +64,21 @@ def refresh(body: RefreshIn, response: Response, service: Service) -> TokenOut:
     tokens = service.refresh(body.refresh_token)
     response.headers["Cache-Control"] = "no-store"
     return TokenOut.from_tokens(tokens)
+
+
+@router.post("/logout", status_code=204)
+def logout(token: CurrentToken, service: Service) -> Response:
+    """이 기기의 로그인을 끝낸다. 다른 기기의 로그인은 유지된다."""
+    service.logout(token)
+    return Response(status_code=204)
+
+
+@users_router.get("/me", response_model=UserOut)
+def me(token: CurrentToken, users: Users) -> UserOut:
+    return UserOut.from_user(users.get_me(token.user_id))
+
+
+@users_router.put("/me/profile", response_model=UserOut)
+def update_profile(body: ProfileIn, token: CurrentToken, users: Users) -> UserOut:
+    """온보딩·프로필 수정. 닉네임이 다른 회원과 겹치면 409 `NICKNAME_TAKEN`."""
+    return UserOut.from_user(users.update_profile(token.user_id, body.to_input()))
