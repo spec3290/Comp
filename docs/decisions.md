@@ -50,10 +50,12 @@
   - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 502 `OAUTH_UNAVAILABLE`, 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
-    - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`. 자격 파라미터(`education` 등)와 `eligibility_check_needed`는 F3-1·F3-3에서 추가.
+    - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`.
+    - 자격 필터(F3-3): `education`(고등학생/대학생/제한 없음), `team_type`(개인/팀), `region`(전국/시·도 17개, 값은 `app/contests/rules.py`의 enum). 어휘 밖 값은 400 `VALIDATION_ERROR`. 한 차원을 필터하면 요청 값 태그가 있거나, 와일드카드 태그(학력 `제한 없음`, 지역 `전국`)가 있거나, 그 차원이 미분류인 대회가 걸린다. `field`는 원문 분야 텍스트 검색으로 유지한다(Q-19).
+    - `eligibility_check_needed`: 자격 필터가 있으면 필터한 차원 중 하나라도 미분류인 대회, 필터가 없으면 어느 차원에도 태그가 없는 대회가 `true`.
   - 토큰이 없는 요청도 401 `TOKEN_INVALID`다. 인증이 필요한 엔드포인트는 `app.auth.dependencies.get_current_user_id`로 사용자를 받는다.
   - 대회 저장(F2-7): `PUT`·`DELETE /contests/{id}/bookmark`는 본문 없이 204(멱등). 없는 대회 저장은 404, 마감 대회 저장은 409 `CONTEST_CLOSED`(Q-18). `GET /users/me/bookmarks`는 `?page&size` 페이지네이션, 항목은 대회 응답 필드 + `bookmarked_at`(KST ISO 8601), 최근 저장순.
-  - 대회 응답 필드: `id`, `title`, `host`, `field`, `status`(`open`/`upcoming`/`closed`, 조회 시 계산), `d_day`(마감 당일 0), `apply_start`, `apply_end`, `event_start`, `event_end`(날짜 `YYYY-MM-DD`, 없으면 null), `apply_url`, `source_url`. 상세는 `eligibility_text`, `sources`(수집 출처 목록)를 더한다.
+  - 대회 응답 필드: `id`, `title`, `host`, `field`, `status`(`open`/`upcoming`/`closed`, 조회 시 계산), `d_day`(마감 당일 0), `apply_start`, `apply_end`, `event_start`, `event_end`(날짜 `YYYY-MM-DD`, 없으면 null), `apply_url`, `source_url`, `eligibility_tags`(`{ education, team_type, region }` 각각 어휘 순서의 목록, 빈 목록은 미분류), `eligibility_check_needed`. 상세는 `eligibility_text`, `sources`(수집 출처 목록)를 더한다.
 - **엔드포인트 초안**:
 
 | 기능 | 메서드·경로 | 인증 |
@@ -82,13 +84,13 @@
 | access_token_blacklist (Redis) | 테이블 없이 `blacklist:{jti}`. 만료는 Redis TTL이라 정리 작업이 없다 (Q-17) |
 | contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
 | contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
-| contest_tags (MongoDB) | contest_id, dimension(학력/참가형태/분야/지역), value, origin(rule/llm). 태그가 없으면 미분류 |
-| qualification_rules | id, dimension, keyword, value, enabled |
+| contest_tags (MongoDB) | 별도 컬렉션 없이 `contests.tags`에 내장: `{ education: [], team_type: [], region: [] }`. 빈 목록(또는 `tags` 없음)은 그 차원이 미분류. 대표 소스의 제목·자격 원문으로 수집 때마다 다시 분류한다. origin(rule/llm)은 F6-4에서 추가 |
+| qualification_rules | 테이블 없이 `app/contests/qualification_rules.toml`: dimension, value, keywords[]. 관리 화면(F3-2)이 생기면 테이블로 옮긴다 (Q-8) |
 | contest_clicks | id, contest_id, user_id NULL, clicked_at (클릭 수는 집계) |
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at. user_id는 users FK `ON DELETE CASCADE` (마이그레이션 `0003`) |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
+- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 자격 태그 어휘(학력·참가 형태·지역)는 `app/contests/rules.py`의 enum이고, 프로필 기본값(F3-3)을 붙일 때 학교 유형 → 학력 대응을 정한다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -119,7 +121,7 @@
 | Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 닉네임은 앞뒤 공백 제외 2~12자(NFC, 제어 문자 금지), 중복 불가. 학교 유형: 중학교/고등학교/대학교/기타. 학년 1~6, 선택 입력. 관심 분야: 개발/AI/보안/디자인/아이디어 복수 선택 (사용자가 기본값 승인) | 결정됨 |
 | Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 소스에 값이 있으면 크롤링한다(DACON은 일정 HTML의 '참가(신청) 기간', 없으면 대회 기간). 그래도 시작일이 없으면 '접수 중'으로 간주 | 결정됨 |
 | Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 로컬 삭제는 진행, revoke 실패는 로그 + 재시도 큐는 2차 | 열림 |
-| Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 사용자가 초안 제공, 에이전트가 설정 파일로 구성 | 열림 |
+| Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 에이전트가 초안을 `app/contests/qualification_rules.toml`로 구성하고 PR에서 검토(사용자 승인). 애매한 단어(단독 '개인'·'팀'·지역명, 'N명 이내')는 넣지 않아 잘못된 태그보다 미분류를 택한다 | 결정됨 |
 | Q-9 | 한 대회에 여러 태그가 걸릴 때(예: 고등학생+대학생) 필터 매칭은 OR인가 AND인가? | F2-3, F3-3 (ADR-0004) | 같은 파라미터 안은 OR, 파라미터 사이는 AND | 결정됨 |
 | Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
 | Q-11 | 커밋 메시지의 `(#이슈번호)`는 PDF 규칙(merge/PR에만 사용)과 예시(일반 커밋에도 사용)가 어긋난다. 어느 쪽이 맞나? | git-workflow 스킬 | merge/PR(🔀)에는 필수, 일반 커밋에는 선택 | 열림 |
@@ -130,3 +132,4 @@
 | Q-16 | 소셜 로그인 콜백이 서비스 JWT를 클라이언트에 어떻게 전달하나? (JSON 응답 / 프론트로 리다이렉트 / 프론트가 code를 POST) | F1-6 (ADR-0004) | 콜백이 JSON으로 응답. 프론트엔드가 생기면 리다이렉트 방식을 다시 검토 | 결정됨 |
 | Q-17 | 로그아웃 시 Access Token 블랙리스트 저장소는? | F1-5 (ADR-0002) | Refresh와 같은 Redis에 `blacklist:{jti}`를 Access 남은 만료만큼 TTL로 저장 (사용자 결정) | 결정됨 |
 | Q-18 | 접수가 마감된 대회도 저장(북마크)할 수 있나? | F2-7 | 409 `CONTEST_CLOSED`로 거절한다(마감 당일까지는 허용). 해제·목록 조회는 항상 가능하고, 저장 후 마감된 대회는 목록에 `closed`로 남는다 | 결정됨 |
+| Q-19 | 자격 태그의 분야 차원(개발·AI·보안·디자인·아이디어)도 키워드 규칙으로 분류하나? | F3-1, F3-3 | 1차에서는 분류하지 않는다. 분야는 키워드로 정확히 가르기 어렵고 잘못된 태그는 대회를 필터에서 숨긴다. 학력·참가 형태·지역만 태그로 두고, 기존 `field`(원문 분야 텍스트 검색)는 유지. 분야 태그는 F6-4(LLM 분류 보조) 때 다시 검토 (사용자 결정) | 결정됨 |
