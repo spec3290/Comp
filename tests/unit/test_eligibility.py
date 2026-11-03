@@ -29,6 +29,7 @@ def test_eligibility_text_is_tagged_by_keyword_rules() -> None:
 @pytest.mark.feature("F3-1")
 def test_keywords_ignore_spacing_and_case() -> None:
     assert classify("참가자격 제한없음", RULES).education == {"제한 없음"}
+    assert classify("학력: 제한 없음", RULES).education == {"제한 없음"}
     assert classify("서울시민 누구나", RULES).region == {"서울"}
 
 
