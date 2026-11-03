@@ -81,7 +81,13 @@ def test_recollecting_creates_no_duplicates(
 
     results = collect(SAME_CONTEST_SOURCES, repo, TODAY)
 
-    assert all(SaveOutcome.INSERTED not in r.outcomes for r in results)
+    assert [r.error for r in results] == [None, None, None]
+    # 대표 소스는 값을 갱신하고, 나머지는 출처만 갱신한다. 새로 만든 문서는 없다
+    assert [dict(r.outcomes) for r in results] == [
+        {SaveOutcome.UPDATED: 1},
+        {SaveOutcome.MERGED: 1},
+        {SaveOutcome.MERGED: 1},
+    ]
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     assert [s["source"] for s in docs[0]["sources"]] == ["dev_event", "dacon", "linkareer"]
