@@ -20,7 +20,8 @@
 | ADR-0005 | 데이터 모델 원칙과 초안 | 제안 | 전체 |
 | ADR-0006 | 검증은 GitHub Actions CI로 일원화 | 채택 | 전체 |
 | ADR-0007 | 기능별 패키지 + 얇은 3계층으로 단순화 | 채택 | 전체 |
-| ADR-0008 | PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소, Refresh Token은 Redis | 채택 | 전체 (ADR-0005) |
+| ADR-0008 | PostgreSQL(메인) + MongoDB(대회·벡터) 이원 저장소, Refresh Token은 Redis | 채택 (자격 규칙·태그 저장 위치는 ADR-0009로 대체) | 전체 (ADR-0005) |
+| ADR-0009 | 자격 분류 규칙은 설정 파일, 태그는 대회 문서에 내장 | 채택 | F3-1, F3-3 |
 
 ### ADR-0001 레이어드 아키텍처와 import-linter (대체됨 → ADR-0007)
 - **배경**: 에이전트가 빠르게 코드를 만들수록 구조가 흐트러진다. 문서만으로는 레이어 규칙이 지켜지지 않는다.
@@ -90,7 +91,7 @@
 | crawl_runs | id, source, started_at, finished_at, status, error |
 | bookmarks | `PK(user_id, contest_id)`, created_at. user_id는 users FK `ON DELETE CASCADE` (마이그레이션 `0003`) |
 
-- **인덱스 메모**: `contests(apply_end)`, `contest_tags(dimension, value)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 자격 태그 어휘(학력·참가 형태·지역)는 `app/contests/rules.py`의 enum이고, 프로필 기본값(F3-3)을 붙일 때 학교 유형 → 학력 대응을 정한다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
+- **인덱스 메모**: `contests(apply_end)`, 제목 검색은 MongoDB 쿼리로 한다(방식은 구현 시 결정). 표에 `(MongoDB)`·`(Redis)`가 없는 테이블은 PostgreSQL이다(ADR-0008). users는 Alembic 마이그레이션 `0001`, 프로필 컬럼·user_interest_fields는 `0002`로 만들었다. 학교 유형·관심 분야 어휘는 `app/auth/rules.py`의 enum 하나를 프로필·태그·필터가 같이 쓴다. 자격 태그 어휘(학력·참가 형태·지역)는 `app/contests/rules.py`의 enum이고, 프로필 기본값(F3-3)을 붙일 때 학교 유형 → 학력 대응을 정한다. 탈퇴(F1-8)는 users와 참조 행을 모두 삭제한다. 접수 마감 3일이 지난 대회는 수집 실행 때 하드 삭제하므로(Q-3) 이를 참조하는 bookmarks·contest_clicks는 대회가 없을 수 있음을 전제로 한다. 같은 소스·원문 URL의 대회가 마감일·제목을 바꾸면 merge_key를 옮겨 같은 문서를 유지한다.
 
 ### ADR-0006 검증은 GitHub Actions CI로 일원화
 - **배경**: 로컬 훅·Makefile·문서 검사 스크립트가 늘면서 하네스가 잘게 쪼개졌다.
@@ -109,6 +110,12 @@
 - **결정**: PostgreSQL(SQLAlchemy + Alembic, `migrations/`)을 메인 DB로 두고 users, bookmarks, contest_clicks, crawl_runs, qualification_rules 등을 저장한다. MongoDB(pymongo)에는 대회 데이터(contests, contest_sources, contest_tags)와 벡터(임베딩)를 저장한다. 만료가 있는 Refresh Token과 Access 블랙리스트는 Redis(redis-py)에 둔다(Q-4, Q-17). 연결은 `app/core/db.py`(MongoDB), `app/core/sql.py`(PostgreSQL), `app/core/kv.py`(Redis)에 두고, 실제 접근은 각 기능의 `repository`에서만 한다. 로컬 개발용 PostgreSQL·Redis는 `docker-compose.yml`로 띄운다.
 - **대안**: PostgreSQL 단일(+pgvector, 저장소 하나로 단순하지만 사용자가 MongoDB를 선택), MongoDB 단일(인증·토큰 회전의 관계형 제약을 직접 구현해야 함).
 - **결과**: 대회 스키마 변경에 마이그레이션이 필요 없고 벡터를 대회 문서 옆에 둘 수 있다. 두 DB 사이에는 FK·트랜잭션이 없어서 bookmarks·contest_clicks의 `contest_id`는 MongoDB `_id` 문자열을 참조만 하고, 대회 삭제·병합 시 정합성은 서비스 코드가 맞춘다.
+
+### ADR-0009 자격 분류 규칙은 설정 파일, 태그는 대회 문서에 내장
+- **배경**: ADR-0008은 `qualification_rules`를 PostgreSQL에, `contest_tags`를 MongoDB의 별도 컬렉션에 두었다. 1차에는 규칙 관리 화면(F3-2)이 없어서 규칙을 DB에 두어도 손으로 고쳐야 한다. 태그를 별도 컬렉션에 두면 자격 필터와 페이지네이션을 하려고 대회와 조인(`$lookup`)해야 한다.
+- **결정**: 키워드 규칙은 저장소의 `app/contests/qualification_rules.toml`에 두고 PR로 고친다(Q-8). 수집 실행 때 읽고, 어휘(enum) 밖의 값은 로딩할 때 거절한다. 태그는 `contests.tags`(`{ education, team_type, region }` 각각 값 목록)에 내장하고 대표 소스의 값으로 수집 때마다 다시 계산한다. ADR-0008의 나머지 저장소 분담은 그대로다.
+- **대안**: ADR-0008대로 PostgreSQL 테이블 + 별도 태그 컬렉션(마이그레이션·초기 데이터 입력이 늘고 목록 조회에 조인이 필요하다).
+- **결과**: 규칙 변경 이력이 Git에 남고, 필터는 MongoDB 쿼리 한 번으로 끝난다. 규칙을 바꾸면 다음 수집 때 반영된다. 관리 화면(F3-2)이나 LLM 태그 출처(F6-4)가 생기면 규칙 테이블과 태그 `origin`을 다시 검토한다.
 
 ## 결정이 필요한 항목
 

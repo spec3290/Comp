@@ -43,8 +43,10 @@ def test_one_text_can_carry_several_values() -> None:
 @pytest.mark.feature("F3-1")
 def test_no_match_leaves_dimension_unclassified() -> None:
     assert classify("", RULES) == EligibilityTags()
-    # '개인정보', '운영팀', 개최 장소의 지역명은 자격이 아니다
-    tags = classify("개인정보 수집 동의 필요. 문의: 운영팀. 장소: 서울 코엑스", RULES)
+    # '개인정보', '운영팀', 개최 장소의 지역명, 인원 제한은 자격이 아니다
+    tags = classify(
+        "개인정보 수집 동의. 문의: 운영팀. 장소: 서울 코엑스. 참가 인원 제한 없음", RULES
+    )
     assert tags == EligibilityTags()
 
 
