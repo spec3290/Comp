@@ -13,7 +13,14 @@ from pymongo.database import Database
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import COLLECTION, ContestRepository, SaveOutcome
-from app.contests.rules import ContestQuery, ContestStatus, SortOrder, merge_key
+from app.contests.rules import (
+    NO_TAGS,
+    ContestQuery,
+    ContestStatus,
+    EligibilityTags,
+    SortOrder,
+    merge_key,
+)
 from app.core.db import Document
 from app.core.time import KST, now_kst
 
@@ -57,8 +64,11 @@ def _contest(
     )
 
 
-def _save(repo: ContestRepository, contest: RawContest) -> SaveOutcome:
-    return repo.save(contest, merge_key(contest.title, contest.host, contest.apply_end), now_kst())
+def _save(
+    repo: ContestRepository, contest: RawContest, tags: EligibilityTags = NO_TAGS
+) -> SaveOutcome:
+    key = merge_key(contest.title, contest.host, contest.apply_end)
+    return repo.save(contest, key, now_kst(), tags=tags)
 
 
 @pytest.mark.feature("F2-2")
@@ -67,10 +77,16 @@ def test_save_is_idempotent_and_merges_sources(db: Database[Document]) -> None:
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
 
-    assert repo.save(_contest("a"), key, now_kst()) is SaveOutcome.INSERTED
-    assert repo.save(_contest("a", field="AI, 데이터"), key, now_kst()) is SaveOutcome.UPDATED
-    assert repo.save(_contest("b", field="무시됨"), key, now_kst()) is SaveOutcome.MERGED
-    assert repo.save(_contest("b"), key, now_kst()) is SaveOutcome.MERGED
+    assert repo.save(_contest("a"), key, now_kst(), tags=EligibilityTags()) is SaveOutcome.INSERTED
+    assert (
+        repo.save(_contest("a", field="AI, 데이터"), key, now_kst(), tags=EligibilityTags())
+        is SaveOutcome.UPDATED
+    )
+    assert (
+        repo.save(_contest("b", field="무시됨"), key, now_kst(), tags=EligibilityTags())
+        is SaveOutcome.MERGED
+    )
+    assert repo.save(_contest("b"), key, now_kst(), tags=EligibilityTags()) is SaveOutcome.MERGED
 
     docs = list(db[COLLECTION].find())
     assert len(docs) == 1
@@ -177,7 +193,7 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Docu
 
     def save(contest: RawContest) -> SaveOutcome:
         barrier.wait()  # 최대한 동시에 출발시킨다
-        return repo.save(contest, key, now_kst())
+        return repo.save(contest, key, now_kst(), tags=EligibilityTags())
 
     with ThreadPoolExecutor(max_workers=len(contests)) as pool:
         outcomes = list(pool.map(save, contests))
@@ -208,3 +224,44 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(db: Database[D
     assert len(docs) == 1
     assert docs[0]["apply_end"].date() == date(2026, 11, 1)
     assert SaveOutcome.INSERTED not in outcomes
+
+
+@pytest.mark.feature("F3-1")
+def test_tags_follow_representative_source(db: Database[Document]) -> None:
+    repo = ContestRepository(db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a"), EligibilityTags(education=frozenset({"대학생"})))
+    _save(repo, _contest("b"), EligibilityTags(education=frozenset({"고등학생"})))
+
+    (record,), _ = repo.find(ContestQuery(), TODAY)
+
+    assert record.tags == EligibilityTags(education=frozenset({"대학생"}))
+
+
+@pytest.mark.feature("F3-3")
+def test_find_by_eligibility_keeps_wildcards_and_unclassified(db: Database[Document]) -> None:
+    repo = ContestRepository(db)
+    repo.ensure_indexes()
+    _save(
+        repo,
+        _contest("a", title="대학생 서울"),
+        EligibilityTags(education=frozenset({"대학생"}), region=frozenset({"서울"})),
+    )
+    _save(repo, _contest("a", title="고등학생"), EligibilityTags(education=frozenset({"고등학생"})))
+    _save(
+        repo,
+        _contest("a", title="누구나 전국"),
+        EligibilityTags(education=frozenset({"제한 없음"}), region=frozenset({"전국"})),
+    )
+    _save(repo, _contest("a", title="미분류"))
+    db[COLLECTION].update_one({"title": "미분류"}, {"$unset": {"tags": ""}})  # 분류 전 문서
+
+    university = ContestQuery(eligibility=EligibilityTags(education=frozenset({"대학생"})))
+    assert sorted(_titles(repo, university)) == ["누구나 전국", "대학생 서울", "미분류"]
+
+    both = ContestQuery(
+        eligibility=EligibilityTags(
+            education=frozenset({"고등학생", "대학생"}), region=frozenset({"부산"})
+        )
+    )
+    assert sorted(_titles(repo, both)) == ["고등학생", "누구나 전국", "미분류"]

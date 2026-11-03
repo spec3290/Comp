@@ -6,8 +6,20 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from app.contests.rules import ContestStatus
+from app.contests.rules import ContestStatus, Dimension, EligibilityTags
 from app.contests.service import BookmarkPage, BookmarkView, ContestPage, ContestView
+
+
+class EligibilityTagsOut(BaseModel):
+    """분류된 자격 태그 (F3-1). 빈 목록은 그 차원이 미분류라는 뜻이다."""
+
+    education: list[str]
+    team_type: list[str]
+    region: list[str]
+
+    @classmethod
+    def from_tags(cls, tags: EligibilityTags) -> EligibilityTagsOut:
+        return cls(**{d.value: tags.ordered(d) for d in Dimension})
 
 
 class ContestSummaryOut(BaseModel):
@@ -23,6 +35,8 @@ class ContestSummaryOut(BaseModel):
     event_end: date | None
     apply_url: str
     source_url: str
+    eligibility_tags: EligibilityTagsOut
+    eligibility_check_needed: bool
 
     @classmethod
     def from_view(cls, view: ContestView) -> ContestSummaryOut:
@@ -40,6 +54,8 @@ class ContestSummaryOut(BaseModel):
             event_end=r.event_end,
             apply_url=r.apply_url,
             source_url=r.source_url,
+            eligibility_tags=EligibilityTagsOut.from_tags(r.tags),
+            eligibility_check_needed=view.eligibility_check_needed,
         )
 
 

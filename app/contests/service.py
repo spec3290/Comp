@@ -1,8 +1,10 @@
-"""대회 수집 (F2-1) + 중복 제거 (F2-2) + 조회 (F2-3, F2-4) + 저장 (F2-7).
+"""대회 수집 (F2-1) + 중복 제거 (F2-2) + 자격 분류 (F3-1) + 조회 (F2-3, F2-4, F3-3) + 저장 (F2-7).
 
 수집: 소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만
-남기며, 다른 소스는 계속 진행한다. 마감 3일이 지난 대회는 지운다 (Q-3).
-조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다.
+남기며, 다른 소스는 계속 진행한다. 저장하기 전에 제목·참가 자격 원문으로 자격 태그를 붙인다.
+마감 3일이 지난 대회는 지운다 (Q-3).
+조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다. 자격 필터에 미분류로
+걸린 대회는 '자격 확인 필요'로 표시한다.
 저장: 마감된 대회는 새로 저장할 수 없다 (Q-18). 목록에서는 삭제된 대회를 건너뛴다.
 """
 
@@ -25,7 +27,18 @@ from app.contests.repository import (
     ContestRepository,
     SaveOutcome,
 )
-from app.contests.rules import ApplyPeriod, ContestQuery, ContestStatus, merge_key, purge_cutoff
+from app.contests.rules import (
+    NO_TAGS,
+    ApplyPeriod,
+    ContestQuery,
+    ContestStatus,
+    EligibilityTags,
+    KeywordRule,
+    classify,
+    merge_key,
+    needs_eligibility_check,
+    purge_cutoff,
+)
 from app.core.db import get_database
 from app.core.errors import ContestClosedError, NotFoundError
 from app.core.sql import get_session
@@ -44,12 +57,17 @@ class CollectResult:
 
 
 def collect(
-    sources: Iterable[ContestSource], repo: ContestRepository, today: date
+    sources: Iterable[ContestSource],
+    repo: ContestRepository,
+    today: date,
+    rules: tuple[KeywordRule, ...],
 ) -> list[CollectResult]:
-    return [_collect_one(source, repo, today) for source in sources]
+    return [_collect_one(source, repo, today, rules) for source in sources]
 
 
-def _collect_one(source: ContestSource, repo: ContestRepository, today: date) -> CollectResult:
+def _collect_one(
+    source: ContestSource, repo: ContestRepository, today: date, rules: tuple[KeywordRule, ...]
+) -> CollectResult:
     result = CollectResult(source=source.name)
     cutoff = purge_cutoff(today)
     try:
@@ -60,7 +78,8 @@ def _collect_one(source: ContestSource, repo: ContestRepository, today: date) ->
                 result.skipped += 1
                 continue
             key = merge_key(contest.title, contest.host, contest.apply_end)
-            result.outcomes[repo.save(contest, key, now_kst())] += 1
+            tags = classify(f"{contest.title}\n{contest.eligibility_text}", rules)
+            result.outcomes[repo.save(contest, key, now_kst(), tags=tags)] += 1
     except Exception as exc:
         logger.exception("수집 실패: %s", source.name)
         result.error = f"{type(exc).__name__}: {exc}"
@@ -87,6 +106,7 @@ class ContestView:
     record: ContestRecord
     status: ContestStatus
     d_day: int
+    eligibility_check_needed: bool
 
 
 @dataclass(frozen=True)
@@ -97,9 +117,14 @@ class ContestPage:
     total: int
 
 
-def _view(record: ContestRecord, today: date) -> ContestView:
+def _view(record: ContestRecord, today: date, requested: EligibilityTags = NO_TAGS) -> ContestView:
     period = ApplyPeriod(start=record.apply_start, end=record.apply_end)
-    return ContestView(record=record, status=period.status(today), d_day=period.d_day(today))
+    return ContestView(
+        record=record,
+        status=period.status(today),
+        d_day=period.d_day(today),
+        eligibility_check_needed=needs_eligibility_check(record.tags, requested),
+    )
 
 
 class ContestQueryService:
@@ -108,7 +133,7 @@ class ContestQueryService:
 
     def list_contests(self, query: ContestQuery, today: date) -> ContestPage:
         records, total = self._repo.find(query, today)
-        items = [_view(record, today) for record in records]
+        items = [_view(record, today, query.eligibility) for record in records]
         return ContestPage(items=items, page=query.page, size=query.size, total=total)
 
     def get_contest(self, contest_id: str, today: date) -> ContestView:

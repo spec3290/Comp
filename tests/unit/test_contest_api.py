@@ -1,4 +1,4 @@
-"""대회 조회 API (F2-3, F2-4). 저장소는 메모리 가짜로 바꾸고 오늘 날짜를 고정한다."""
+"""대회 조회 API (F2-3, F2-4, F3-3). 저장소는 메모리 가짜로 바꾸고 오늘 날짜를 고정한다."""
 
 from collections.abc import Iterator
 from datetime import date
@@ -8,14 +8,19 @@ from fastapi.testclient import TestClient
 
 from app.contests.repository import ContestRecord, ContestRepository
 from app.contests.router import today_kst
-from app.contests.rules import ContestQuery, ContestStatus, SortOrder
+from app.contests.rules import NO_TAGS, ContestQuery, ContestStatus, EligibilityTags, SortOrder
 from app.contests.service import ContestQueryService, get_query_service
 from app.main import app
 
 TODAY = date(2026, 10, 23)
 
 
-def _record(contest_id: str, apply_start: date | None, apply_end: date) -> ContestRecord:
+def _record(
+    contest_id: str,
+    apply_start: date | None,
+    apply_end: date,
+    tags: EligibilityTags = NO_TAGS,
+) -> ContestRecord:
     return ContestRecord(
         id=contest_id,
         title=f"대회 {contest_id}",
@@ -29,6 +34,7 @@ def _record(contest_id: str, apply_start: date | None, apply_end: date) -> Conte
         apply_url="https://example.com/apply",
         source_url="https://example.com",
         sources=("dacon", "linkareer"),
+        tags=tags,
     )
 
 
@@ -50,7 +56,12 @@ class FakeRepository(ContestRepository):
 def repo() -> FakeRepository:
     return FakeRepository(
         [
-            _record("a", date(2026, 10, 1), date(2026, 10, 30)),
+            _record(
+                "a",
+                date(2026, 10, 1),
+                date(2026, 10, 30),
+                EligibilityTags(education=frozenset({"대학생"}), team_type=frozenset({"팀"})),
+            ),
             _record("b", date(2026, 11, 1), date(2026, 11, 30)),
             _record("c", None, date(2026, 10, 23)),
         ],
@@ -125,6 +136,9 @@ def test_list_parses_filters_search_sort_and_paging(
         {"sort": "popular"},
         {"status": "open,ended"},
         {"q": "가" * 101},
+        {"education": "대학생,초등학생"},
+        {"team_type": "단체"},
+        {"region": "서울시"},
     ],
 )
 def test_list_rejects_invalid_params_with_400(
@@ -153,3 +167,36 @@ def test_detail_unknown_id_returns_404(client: TestClient) -> None:
 
     assert res.status_code == 404
     assert res.json() == {"error": {"code": "NOT_FOUND", "message": "대회를 찾을 수 없습니다."}}
+
+
+@pytest.mark.feature("F3-3")
+def test_list_parses_eligibility_filters(client: TestClient, repo: FakeRepository) -> None:
+    res = client.get(
+        "/contests",
+        params={"education": "대학생, 제한 없음", "team_type": "팀", "region": "서울,전국"},
+    )
+
+    assert res.status_code == 200
+    assert repo.queries[0].eligibility == EligibilityTags(
+        education=frozenset({"대학생", "제한 없음"}),
+        team_type=frozenset({"팀"}),
+        region=frozenset({"서울", "전국"}),
+    )
+
+
+@pytest.mark.feature("F3-3")
+def test_list_marks_contests_matched_only_as_unclassified(client: TestClient) -> None:
+    res = client.get("/contests", params={"education": "대학생"})
+
+    items = {item["id"]: item for item in res.json()["items"]}
+    assert items["a"]["eligibility_check_needed"] is False
+    assert items["b"]["eligibility_check_needed"] is True
+
+
+@pytest.mark.feature("F2-4")
+def test_detail_returns_classified_tags_in_vocabulary_order(client: TestClient) -> None:
+    body = client.get("/contests/a").json()
+
+    assert body["eligibility_tags"] == {"education": ["대학생"], "team_type": ["팀"], "region": []}
+    assert body["eligibility_check_needed"] is False
+    assert client.get("/contests/b").json()["eligibility_check_needed"] is True
