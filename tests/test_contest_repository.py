@@ -210,8 +210,8 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(
 
 
 @pytest.mark.feature("F3-1")
-def test_tags_follow_representative_source(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_tags_follow_representative_source(mongo_db: Database[Document]) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("a"), EligibilityTags(education=frozenset({"대학생"})))
     _save(repo, _contest("b"), EligibilityTags(education=frozenset({"고등학생"})))
@@ -222,8 +222,8 @@ def test_tags_follow_representative_source(db: Database[Document]) -> None:
 
 
 @pytest.mark.feature("F3-3")
-def test_find_by_eligibility_keeps_wildcards_and_unclassified(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_find_by_eligibility_keeps_wildcards_and_unclassified(mongo_db: Database[Document]) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(
         repo,
@@ -237,7 +237,7 @@ def test_find_by_eligibility_keeps_wildcards_and_unclassified(db: Database[Docum
         EligibilityTags(education=frozenset({"제한 없음"}), region=frozenset({"전국"})),
     )
     _save(repo, _contest("a", title="미분류"))
-    db[COLLECTION].update_one({"title": "미분류"}, {"$unset": {"tags": ""}})  # 분류 전 문서
+    mongo_db[COLLECTION].update_one({"title": "미분류"}, {"$unset": {"tags": ""}})  # 분류 전 문서
 
     university = ContestQuery(eligibility=EligibilityTags(education=frozenset({"대학생"})))
     assert sorted(_titles(repo, university)) == ["누구나 전국", "대학생 서울", "미분류"]

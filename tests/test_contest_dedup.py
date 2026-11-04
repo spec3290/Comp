@@ -13,10 +13,12 @@ from pymongo.errors import DuplicateKeyError
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import COLLECTION, ContestRepository, SaveOutcome
+from app.contests.rules import load_rules
 from app.contests.service import collect
 from app.core.db import Document
 
 TODAY = date(2026, 10, 23)
+RULES = load_rules()
 
 
 def _contest(source: str, title: str = "2026 AI 해커톤", host: str = "주최사") -> RawContest:
@@ -63,7 +65,7 @@ def repo(mongo_db: Database[Document]) -> ContestRepository:
 def test_same_contest_from_several_sites_is_stored_once(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    results = collect(SAME_CONTEST_SOURCES, repo, TODAY)
+    results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     assert [r.error for r in results] == [None, None, None]
     docs = list(mongo_db[COLLECTION].find())
@@ -77,9 +79,9 @@ def test_same_contest_from_several_sites_is_stored_once(
 def test_recollecting_creates_no_duplicates(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    collect(SAME_CONTEST_SOURCES, repo, TODAY)
+    collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
-    results = collect(SAME_CONTEST_SOURCES, repo, TODAY)
+    results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     assert [r.error for r in results] == [None, None, None]
     # 대표 소스는 값을 갱신하고, 나머지는 출처만 갱신한다. 새로 만든 문서는 없다
@@ -105,7 +107,7 @@ def test_contests_differing_in_title_host_or_deadline_are_kept_apart(
         replace(base, apply_end=date(2026, 11, 2), source_url="https://dacon.example.com/4"),
     ]
 
-    collect([FakeSource("dacon", contests)], repo, TODAY)
+    collect([FakeSource("dacon", contests)], repo, TODAY, RULES)
 
     assert mongo_db[COLLECTION].count_documents({}) == 4
 
@@ -114,7 +116,7 @@ def test_contests_differing_in_title_host_or_deadline_are_kept_apart(
 def test_merge_key_is_unique_in_database(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    collect(SAME_CONTEST_SOURCES[:1], repo, TODAY)
+    collect(SAME_CONTEST_SOURCES[:1], repo, TODAY, RULES)
     doc = mongo_db[COLLECTION].find_one()
     assert doc is not None
 
