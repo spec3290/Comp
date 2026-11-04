@@ -1,38 +1,17 @@
-"""실제 MongoDB 통합 테스트. MONGODB_TEST_URI 가 있을 때만 돈다 (임시 DB 를 만들고 지운다)."""
+"""실제 MongoDB 통합 테스트. 임시 DB 는 conftest 의 mongo_db 가 만들고 지운다."""
 
-import os
 import threading
-import uuid
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import pytest
-from pymongo import MongoClient
 from pymongo.database import Database
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import COLLECTION, ContestRepository, SaveOutcome
 from app.contests.rules import ContestQuery, ContestStatus, SortOrder, merge_key
 from app.core.db import Document
-from app.core.time import KST, now_kst
-
-TEST_URI = os.environ.get("MONGODB_TEST_URI")
-pytestmark = pytest.mark.skipif(not TEST_URI, reason="MONGODB_TEST_URI 미설정")
-
-
-@pytest.fixture
-def db() -> Iterator[Database[Document]]:
-    client: MongoClient[Document] = MongoClient(TEST_URI, tz_aware=True, tzinfo=KST)
-    name = f"test_{uuid.uuid4().hex[:12]}"
-    database = client[name]
-    try:
-        yield database
-    finally:
-        # Atlas 사용자에게 dropDatabase 권한이 없을 수 있어 컬렉션을 지운다 (빈 DB 는 사라진다)
-        for collection in database.list_collection_names():
-            database.drop_collection(collection)
-        client.close()
+from app.core.time import now_kst
 
 
 def _contest(
@@ -62,8 +41,8 @@ def _save(repo: ContestRepository, contest: RawContest) -> SaveOutcome:
 
 
 @pytest.mark.feature("F2-2")
-def test_save_is_idempotent_and_merges_sources(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_save_is_idempotent_and_merges_sources(mongo_db: Database[Document]) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
 
@@ -72,7 +51,7 @@ def test_save_is_idempotent_and_merges_sources(db: Database[Document]) -> None:
     assert repo.save(_contest("b", field="무시됨"), key, now_kst()) is SaveOutcome.MERGED
     assert repo.save(_contest("b"), key, now_kst()) is SaveOutcome.MERGED
 
-    docs = list(db[COLLECTION].find())
+    docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     doc = docs[0]
     assert doc["source"] == "a"
@@ -86,8 +65,8 @@ TODAY = date(2026, 10, 23)
 
 
 @pytest.fixture
-def seeded(db: Database[Document]) -> ContestRepository:
-    repo = ContestRepository(db)
+def seeded(mongo_db: Database[Document]) -> ContestRepository:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("a", title="접수중 AI", apply_end=date(2026, 10, 30)))
     _save(repo, _contest("a", title="시작일 없음", apply_start=None, apply_end=TODAY))
@@ -155,21 +134,23 @@ def test_delete_closed_before_keeps_three_days(seeded: ContestRepository) -> Non
 
 
 @pytest.mark.feature("F2-2")
-def test_changed_deadline_moves_existing_document(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_changed_deadline_moves_existing_document(mongo_db: Database[Document]) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("dacon", apply_end=date(2026, 11, 2)))
 
     assert _save(repo, _contest("dacon", apply_end=date(2026, 11, 1))) is SaveOutcome.UPDATED
 
-    docs = list(db[COLLECTION].find())
+    docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     assert docs[0]["apply_end"].date() == date(2026, 11, 1)
 
 
 @pytest.mark.feature("F2-2")
-def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_concurrent_saves_keep_one_document_and_unique_sources(
+    mongo_db: Database[Document],
+) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
     contests = [_contest(source) for source in ("a", "b", "c") for _ in range(8)]
@@ -182,7 +163,7 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Docu
     with ThreadPoolExecutor(max_workers=len(contests)) as pool:
         outcomes = list(pool.map(save, contests))
 
-    docs = list(db[COLLECTION].find())
+    docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     sources = [s["source"] for s in docs[0]["sources"]]
     assert sorted(sources) == ["a", "b", "c"]
@@ -190,8 +171,10 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(db: Database[Docu
 
 
 @pytest.mark.feature("F2-2")
-def test_concurrent_saves_with_changed_deadline_keep_one_document(db: Database[Document]) -> None:
-    repo = ContestRepository(db)
+def test_concurrent_saves_with_changed_deadline_keep_one_document(
+    mongo_db: Database[Document],
+) -> None:
+    repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("dacon", apply_end=date(2026, 11, 2)))
     changed = [_contest("dacon", apply_end=date(2026, 11, 1)) for _ in range(16)]
@@ -204,7 +187,7 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(db: Database[D
     with ThreadPoolExecutor(max_workers=len(changed)) as pool:
         outcomes = list(pool.map(save, changed))
 
-    docs = list(db[COLLECTION].find())
+    docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     assert docs[0]["apply_end"].date() == date(2026, 11, 1)
     assert SaveOutcome.INSERTED not in outcomes
