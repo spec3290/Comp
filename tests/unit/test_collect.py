@@ -5,10 +5,11 @@ import pytest
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import ContestRepository, SaveOutcome
-from app.contests.rules import merge_key
+from app.contests.rules import Dimension, EligibilityTags, KeywordRule, merge_key
 from app.contests.service import collect, purge_closed
 
 TODAY = date(2026, 10, 23)
+RULES = (KeywordRule(Dimension.EDUCATION, "대학생", ("대학생",)),)
 
 
 def _contest(source: str, title: str = "2026 AI 해커톤") -> RawContest:
@@ -30,16 +31,20 @@ def _contest(source: str, title: str = "2026 AI 해커톤") -> RawContest:
 class FakeRepository(ContestRepository):
     def __init__(self) -> None:
         self.saved: dict[str, RawContest] = {}
+        self.tags: dict[str, EligibilityTags] = {}
         self.purge_cutoffs: list[date] = []
 
     def delete_closed_before(self, cutoff: date) -> int:
         self.purge_cutoffs.append(cutoff)
         return 0
 
-    def save(self, contest: RawContest, merge_key: str, now: datetime) -> SaveOutcome:
+    def save(
+        self, contest: RawContest, merge_key: str, now: datetime, *, tags: EligibilityTags
+    ) -> SaveOutcome:
         if merge_key in self.saved:
             return SaveOutcome.MERGED
         self.saved[merge_key] = contest
+        self.tags[merge_key] = tags
         return SaveOutcome.INSERTED
 
 
@@ -58,7 +63,9 @@ class FakeSource:
 def test_failed_source_does_not_block_others() -> None:
     repo = FakeRepository()
 
-    broken, ok = collect([FakeSource("broken"), FakeSource("ok", [_contest("ok")])], repo, TODAY)
+    broken, ok = collect(
+        [FakeSource("broken"), FakeSource("ok", [_contest("ok")])], repo, TODAY, RULES
+    )
 
     assert broken.error == "ConnectionError: site down"
     assert ok.error is None
@@ -77,6 +84,7 @@ def test_same_contest_from_two_sources_is_merged() -> None:
         ],
         repo,
         TODAY,
+        RULES,
     )
 
     assert len(repo.saved) == 1
@@ -108,7 +116,20 @@ def test_contests_already_past_purge_cutoff_are_not_saved() -> None:
     old = replace(_contest("a", "작년 대회"), apply_end=date(2026, 10, 19))
     recent = replace(_contest("a", "막 마감"), apply_end=date(2026, 10, 20))
 
-    (result,) = collect([FakeSource("a", [old, recent])], repo, TODAY)
+    (result,) = collect([FakeSource("a", [old, recent])], repo, TODAY, RULES)
 
     assert result.skipped == 1
     assert [c.title for c in repo.saved.values()] == ["막 마감"]
+
+
+@pytest.mark.feature("F3-1")
+def test_collected_contest_is_classified_before_save() -> None:
+    repo = FakeRepository()
+    tagged = replace(_contest("a", "대회 A"), eligibility_text="참가 대상: 대학생")
+    untagged = _contest("a", "대회 B")
+
+    collect([FakeSource("a", [tagged, untagged])], repo, TODAY, RULES)
+
+    by_title = {repo.saved[key].title: tags for key, tags in repo.tags.items()}
+    assert by_title["대회 A"] == EligibilityTags(education=frozenset({"대학생"}))
+    assert by_title["대회 B"] == EligibilityTags()

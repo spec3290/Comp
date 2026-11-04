@@ -1,4 +1,4 @@
-"""대회 API: 목록 (F2-3), 상세 (F2-4), 저장 (F2-7).
+"""대회 API: 목록 (F2-3, 자격 필터 F3-3), 상세 (F2-4), 저장 (F2-7).
 
 목록·상세는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
 """
@@ -6,12 +6,22 @@
 from __future__ import annotations
 
 from datetime import date
+from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from app.auth.dependencies import CurrentUserId
-from app.contests.rules import DEFAULT_STATUSES, ContestQuery, ContestStatus, SortOrder
+from app.contests.rules import (
+    DEFAULT_STATUSES,
+    ContestQuery,
+    ContestStatus,
+    Education,
+    EligibilityTags,
+    Region,
+    SortOrder,
+    TeamType,
+)
 from app.contests.schemas import BookmarkPageOut, ContestDetailOut, ContestPageOut
 from app.contests.service import (
     BookmarkService,
@@ -44,16 +54,20 @@ def _split(value: str | None) -> tuple[str, ...]:
     return tuple(v.strip() for v in (value or "").split(",") if v.strip())
 
 
+def _parse_choices(name: str, value: str | None, allowed: type[StrEnum]) -> frozenset[str]:
+    """쉼표로 구분한 값이 모두 allowed 에 있어야 한다. 아니면 400."""
+    values = _split(value)
+    unknown = [v for v in values if v not in allowed]
+    if unknown:
+        choices = ", ".join(allowed)
+        raise BadRequestError(f"{name}: 허용 값은 {choices} (받은 값: {unknown})")
+    return frozenset(values)
+
+
 def _parse_statuses(value: str | None) -> frozenset[ContestStatus]:
-    names = _split(value)
+    names = _parse_choices("status", value, ContestStatus)
     if not names:
         return DEFAULT_STATUSES
-    allowed = {s.value for s in ContestStatus}
-    unknown = [n for n in names if n not in allowed]
-    if unknown:
-        raise BadRequestError(
-            f"status: 허용 값은 {', '.join(sorted(allowed))} (받은 값: {unknown})"
-        )
     return frozenset(ContestStatus(n) for n in names)
 
 
@@ -67,11 +81,19 @@ def list_contests(
     status: Annotated[str | None, Query(description="open,upcoming,closed 중 쉼표 구분")] = None,
     field: Annotated[str | None, Query(description="분야 부분 일치, 쉼표 구분 시 OR")] = None,
     q: Annotated[str | None, Query(max_length=100, description="제목 검색")] = None,
+    education: Annotated[str | None, Query(description="고등학생,대학생,제한 없음")] = None,
+    team_type: Annotated[str | None, Query(description="개인,팀")] = None,
+    region: Annotated[str | None, Query(description="전국 또는 시·도 (서울, 경기 등)")] = None,
 ) -> ContestPageOut:
     query = ContestQuery(
         statuses=_parse_statuses(status),
         fields=_split(field),
         keyword=q.strip() if q and q.strip() else None,
+        eligibility=EligibilityTags(
+            education=_parse_choices("education", education, Education),
+            team_type=_parse_choices("team_type", team_type, TeamType),
+            region=_parse_choices("region", region, Region),
+        ),
         sort=sort,
         page=page,
         size=size,
