@@ -2,7 +2,7 @@
 
 수집한 대회는 중복 제거(F2-2)와 자격 분류(F3-1, 규칙은 `qualification_rules.toml`)를 거쳐
 저장한다. 수집이 끝나면 마감 3일이 지난 대회를 지운다 (Q-3).
-주기 실행(예: 하루 1회)은 이 명령을 스케줄러에 등록한다.
+하루 1회 GitHub Actions(`.github/workflows/collect.yml`)가 이 명령을 실행한다 (Q-21).
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import logging
 from app.contests.crawlers.base import ContestSource, new_client
 from app.contests.crawlers.dacon import DaconSource
 from app.contests.crawlers.dev_event import DevEventSource
-from app.contests.crawlers.linkareer import LinkareerSource
+from app.contests.crawlers.devpost import DevpostSource
 from app.contests.repository import ContestRepository
 from app.contests.rules import load_rules
 from app.contests.service import CollectResult, collect, purge_closed
@@ -29,7 +29,7 @@ def run() -> list[CollectResult]:
         sources: list[ContestSource] = [
             DevEventSource(client),
             DaconSource(client),
-            LinkareerSource(client),
+            DevpostSource(client),
         ]
         results = collect(sources, repo, today, rules)
     purge_closed(repo, today)

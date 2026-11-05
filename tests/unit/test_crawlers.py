@@ -7,7 +7,7 @@ import pytest
 
 from app.contests.crawlers.dacon import DaconSource, parse_apply_period
 from app.contests.crawlers.dev_event import DevEventSource
-from app.contests.crawlers.linkareer import LinkareerSource
+from app.contests.crawlers.devpost import DevpostSource, parse_period
 
 
 def _dev_event(**overrides: Any) -> dict[str, Any]:
@@ -123,47 +123,95 @@ def test_dacon_parses_apply_period_from_schedule(
     assert parse_apply_period(schedule) == expected
 
 
-def _linkareer_node(node_id: str) -> dict[str, Any]:
-    return {
-        "id": node_id,
-        "title": "[과기부] 6G 공모전",
-        "organizationName": "과학기술정보통신부",
-        "recruitStartAt": 1791385200000,  # 2026-10-08 00:00 KST
-        "recruitCloseAt": 1794149999999,  # 2026-11-08 23:59:59 KST
-        "homepageURL": "https://www.msit.go.kr",
-        "categories": [{"name": "기획/아이디어"}],
-        "targets": [{"name": "대학생"}],
-        "regions": [{"name": "서울"}],
+def _hackathon(hackathon_id: int, **overrides: Any) -> dict[str, Any]:
+    item = {
+        "id": hackathon_id,
+        "title": " PayPal AI Hackathon ",
+        "organization_name": "PayPal",
+        "url": f"https://hack{hackathon_id}.devpost.com/",
+        "submission_period_dates": "Oct 01 - Nov 12, 2026",
+        "displayed_location": {"icon": "globe", "location": "Online"},
+        "invite_only": False,
+        "themes": [{"id": 6, "name": "Machine Learning/AI"}, {"id": 25, "name": "Web"}],
+        "thumbnail_url": "//cdn.example.com/thumb.png",
     }
+    return item | overrides
 
 
 @pytest.mark.feature("F2-1")
-def test_linkareer_paginates_until_total() -> None:
-    pages = {1: [_linkareer_node("1"), _linkareer_node("2")], 2: [_linkareer_node("3")]}
-    requested: list[int] = []
+def test_devpost_paginates_each_status_and_uses_hackathon_page_as_apply_url() -> None:
+    pages = {
+        ("open", "1"): [_hackathon(1), _hackathon(2)],
+        ("open", "2"): [_hackathon(3)],
+        ("upcoming", "1"): [_hackathon(4)],
+    }
+    totals = {"open": 3, "upcoming": 1}
+    requested: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        variables = json.loads(request.content)["variables"]
-        assert variables["categoryIDs"] == ["35", "28"]
-        page = variables["page"]
-        requested.append(page)
-        return httpx.Response(
-            200, json={"data": {"activities": {"totalCount": 3, "nodes": pages[page]}}}
-        )
+        key = (request.url.params["status[]"], request.url.params["page"])
+        requested.append(key)
+        body = {"hackathons": pages.get(key, []), "meta": {"total_count": totals[key[0]]}}
+        return httpx.Response(200, json=body)
 
-    contests = LinkareerSource(_client(handler), delay_seconds=0).fetch()
+    contests = DevpostSource(_client(handler), delay_seconds=0).fetch()
 
-    assert requested == [1, 2]
-    assert len(contests) == 3
+    assert requested == [("open", "1"), ("open", "2"), ("upcoming", "1")]
+    assert len(contests) == 4
     contest = contests[0]
-    assert (contest.apply_start, contest.apply_end) == (date(2026, 10, 8), date(2026, 11, 8))
-    assert contest.eligibility_text == "대상: 대학생 / 지역: 서울"
-    assert contest.apply_url == "https://linkareer.com/activity/1"
+    assert contest.title == "PayPal AI Hackathon"
+    assert contest.host == "PayPal"
+    assert contest.field == "Machine Learning/AI, Web"
+    assert (contest.apply_start, contest.apply_end) == (date(2026, 10, 1), date(2026, 11, 12))
+    assert contest.apply_url == contest.source_url == "https://hack1.devpost.com/"
 
 
 @pytest.mark.feature("F2-1")
-def test_linkareer_graphql_error_raises() -> None:
-    body = {"errors": [{"message": "boom"}]}
-    source = LinkareerSource(_client(lambda _: httpx.Response(200, json=body)), delay_seconds=0)
-    with pytest.raises(ValueError, match="boom"):
+def test_devpost_skips_offline_invite_only_and_broken_hackathons() -> None:
+    items = [
+        _hackathon(1),
+        _hackathon(2, displayed_location={"icon": "map-marker", "location": "Seattle"}),
+        _hackathon(3, invite_only=True),
+        _hackathon(4, submission_period_dates="TBD"),
+        _hackathon(5, organization_name=None),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        found = items if request.url.params["status[]"] == "open" else []
+        return httpx.Response(200, json={"hackathons": found, "meta": {"total_count": len(found)}})
+
+    contests = DevpostSource(_client(handler), delay_seconds=0).fetch()
+
+    assert [c.apply_url for c in contests] == [
+        "https://hack1.devpost.com/",
+        "https://hack5.devpost.com/",
+    ]
+    assert contests[1].host == "Devpost"
+
+
+@pytest.mark.feature("F2-1")
+def test_devpost_http_error_raises() -> None:
+    source = DevpostSource(_client(lambda _: httpx.Response(503)), delay_seconds=0)
+    with pytest.raises(httpx.HTTPStatusError):
         source.fetch()
+
+
+@pytest.mark.feature("F2-1")
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Oct 01 - Nov 12, 2026", (date(2026, 10, 1), date(2026, 11, 12))),
+        ("Nov 01 - 05, 2026", (date(2026, 11, 1), date(2026, 11, 5))),
+        ("Jul 16, 2026 - Jan 15, 2027", (date(2026, 7, 16), date(2027, 1, 15))),
+        ("Dec 31, 2026", (date(2026, 12, 31), date(2026, 12, 31))),
+    ],
+)
+def test_devpost_parses_submission_period(text: str, expected: tuple[date, date]) -> None:
+    assert parse_period(text) == expected
+
+
+@pytest.mark.feature("F2-1")
+@pytest.mark.parametrize("text", ["TBD", "Foo 01 - 05, 2026", "Feb 30, 2027"])
+def test_devpost_rejects_unknown_period(text: str) -> None:
+    with pytest.raises(ValueError):
+        parse_period(text)
