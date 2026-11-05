@@ -1,8 +1,10 @@
 """소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5) + 내 정보·프로필 (F1-7).
 
-로그인은 두 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
+로그인은 세 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
 쿠키로 보관한 state 와 비교해 CSRF 를 막은 뒤 인가 코드를 회원 식별자로 바꾼다.
 최초 로그인이면 `provider + provider_id` 로 회원을 만든다 (자동 가입, ADR-0003).
+콜백은 토큰 대신 일회용 로그인 코드를 붙여 브라우저를 프론트로 보내고, 프론트가 그 코드를
+`POST /auth/token` 으로 교환해 토큰을 받는다. URL·브라우저 기록에 토큰이 남지 않는다 (Q-16).
 재발급은 Refresh 를 회전하고 같은 family 로 새 토큰 쌍을 발급한다 (ADR-0002).
 """
 
@@ -15,6 +17,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends
@@ -22,8 +25,19 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.oauth import GoogleConfig, GoogleOAuth, OAuthFailedError, OAuthProvider
-from app.auth.repository import NicknameConflictError, TokenStore, UserRepository
+from app.auth.oauth import (
+    GoogleConfig,
+    GoogleOAuth,
+    OAuthFailedError,
+    OAuthProvider,
+    OAuthUnavailableError,
+)
+from app.auth.repository import (
+    LoginCodeStore,
+    NicknameConflictError,
+    TokenStore,
+    UserRepository,
+)
 from app.auth.rules import ProfileInput, ordered_fields
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
@@ -39,6 +53,16 @@ logger = logging.getLogger(__name__)
 class OAuthStateMismatchError(AppError):
     status_code = 400
     code = "OAUTH_STATE_MISMATCH"
+
+
+class LoginCodeInvalidError(AppError):
+    status_code = 401
+    code = "LOGIN_CODE_INVALID"
+
+
+# 콜백에서 프론트로 에러 코드를 붙여 돌려보내는 실패. 그 밖의 예외는 그대로 에러 응답이 된다
+LOGIN_FAILURES = (OAuthStateMismatchError, OAuthFailedError, OAuthUnavailableError)
+LOGIN_CODE_TTL = timedelta(seconds=60)  # 프론트가 리다이렉트를 받고 바로 교환할 시간
 
 
 class NicknameTakenError(AppError):
@@ -65,10 +89,14 @@ class AuthService:
         providers: Mapping[str, OAuthProvider],
         users: UserRepository,
         issuer: TokenIssuer,
+        login_codes: LoginCodeStore,
+        frontend_url: str,
     ) -> None:
         self._providers = providers
         self._users = users
         self._issuer = issuer
+        self._login_codes = login_codes
+        self._frontend_url = frontend_url
 
     def start_login(self, provider_name: str) -> LoginStart:
         provider = self._provider(provider_name)
@@ -86,7 +114,11 @@ class AuthService:
         code: str | None,
         state: str | None,
         expected_state: str | None,
-    ) -> LoginResult:
+    ) -> str:
+        """제공자 콜백을 처리하고 브라우저를 보낼 프론트 주소(`?login_code=...`)를 돌려준다.
+
+        실패하면 LOGIN_FAILURES 중 하나를 던진다. 호출한 쪽은 `failed_login_url` 로 보낸다.
+        """
         provider = self._provider(provider_name)
         # str 끼리는 ASCII 만 비교할 수 있어 비ASCII state 가 500 이 되지 않게 바이트로 비교한다
         if (
@@ -99,11 +131,26 @@ class AuthService:
             # 사용자가 동의 화면에서 취소하면 code 없이 error 만 돌아온다
             raise OAuthFailedError("로그인이 취소되었습니다.")
         identity = provider.exchange_code(code)
-        now = now_kst()
-        user, created = self._users.get_or_create(identity.provider, identity.provider_id, now)
+        user, created = self._users.get_or_create(
+            identity.provider, identity.provider_id, now_kst()
+        )
         if created:
             logger.info("신규 회원 가입: user_id=%d provider=%s", user.id, identity.provider)
-        tokens = self._issuer.issue(user.id, now)
+        login_code = secrets.token_urlsafe(32)
+        self._login_codes.save(login_code, user.id, LOGIN_CODE_TTL)
+        return self._frontend_url_with(login_code=login_code)
+
+    def failed_login_url(self, error_code: str) -> str:
+        """로그인 실패를 알릴 프론트 주소 (`?error=OAUTH_FAILED` 등)."""
+        return self._frontend_url_with(error=error_code)
+
+    def exchange_login_code(self, login_code: str) -> LoginResult:
+        """콜백이 준 일회용 코드를 토큰으로 바꾼다. 코드는 한 번만 쓸 수 있다."""
+        user_id = self._login_codes.consume(login_code)
+        user = self._users.get(user_id) if user_id is not None else None
+        if user is None:
+            raise LoginCodeInvalidError("로그인 코드가 만료되었거나 이미 사용되었습니다.")
+        tokens = self._issuer.issue(user.id, now_kst())
         return LoginResult(tokens=tokens, needs_onboarding=user.needs_onboarding)
 
     def refresh(self, refresh_token: str) -> IssuedTokens:
@@ -121,6 +168,10 @@ class AuthService:
         if provider is None:
             raise NotFoundError(f"지원하지 않거나 설정되지 않은 로그인 제공자입니다: {name}")
         return provider
+
+    def _frontend_url_with(self, **params: str) -> str:
+        separator = "&" if "?" in self._frontend_url else "?"
+        return f"{self._frontend_url}{separator}{urlencode(params)}"
 
 
 class UserService:
@@ -194,10 +245,13 @@ Issuer = Annotated[TokenIssuer, Depends(get_token_issuer)]
 def get_auth_service(
     session: Annotated[Session, Depends(get_session)], issuer: Issuer
 ) -> AuthService:
+    settings = get_settings()
     return AuthService(
-        providers=build_providers(get_settings(), get_http_client()),
+        providers=build_providers(settings, get_http_client()),
         users=UserRepository(session),
         issuer=issuer,
+        login_codes=LoginCodeStore(get_redis()),
+        frontend_url=settings.frontend_login_redirect_url,
     )
 
 

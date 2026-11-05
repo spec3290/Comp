@@ -6,6 +6,7 @@ Refresh Token 은 `refresh:{jti}` 해시에 user_id·family_id 를 담고, 만�
 
 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료 때까지 재사용을 탐지한다.
 로그아웃한 Access 는 `blacklist:{jti}` 에 남은 만료 시간만큼만 둔다 (F1-5).
+소셜 로그인 콜백이 프론트로 넘기는 일회용 코드는 `login_code:{code}` 에 짧게 둔다 (Q-16).
 """
 
 from __future__ import annotations
@@ -105,6 +106,10 @@ def _revoked_key(family_id: str) -> str:
     return f"refresh_family_revoked:{family_id}"
 
 
+def _login_code_key(code: str) -> str:
+    return f"login_code:{code}"
+
+
 @dataclass(frozen=True)
 class RefreshRecord:
     user_id: int
@@ -195,3 +200,21 @@ class TokenStore:
         세션 폐기 표식은 Refresh 만료 시간만큼 남으므로 그 세션의 어떤 Access 보다 오래 간다.
         """
         return bool(self._redis.exists(_blacklist_key(jti), _revoked_key(family_id)))
+
+
+class LoginCodeStore:
+    """콜백에서 프론트로 넘기는 일회용 로그인 코드 (Q-16). 코드 하나는 회원 하나를 가리킨다."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    def save(self, code: str, user_id: int, ttl: timedelta) -> None:
+        self._redis.set(_login_code_key(code), str(user_id), ex=ttl)
+
+    def consume(self, code: str) -> int | None:
+        """코드를 지우면서 회원 id 를 돌려준다. 없거나 만료됐거나 이미 썼으면 None.
+
+        GETDEL 한 번으로 읽고 지우므로 같은 코드로 동시에 교환해도 한 요청만 성공한다.
+        """
+        value = self._redis.getdel(_login_code_key(code))
+        return int(value) if isinstance(value, str) else None

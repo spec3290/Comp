@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.repository import TokenStore, UserRepository
+from app.auth.repository import LoginCodeStore, TokenStore, UserRepository
 from app.auth.service import AuthService, build_providers, get_auth_service
 from app.auth.tokens import TokenIssuer
 from app.core.config import Settings
@@ -18,11 +18,16 @@ from app.core.time import now_kst
 from app.main import app
 from tests.unit.auth_support import (
     ACCESS_TTL,
+    FRONTEND_URL,
+    OUTAGE_CODE,
     REFRESH_TTL,
     SECRET,
     FakeProvider,
+    callback,
     claims,
+    frontend_params,
     login,
+    start_state,
     user_count,
 )
 
@@ -47,7 +52,13 @@ def test_state_cookie_is_secure_when_callback_is_https(
 ) -> None:
     issuer = TokenIssuer(TokenStore(redis), SECRET, ACCESS_TTL, REFRESH_TTL)
     provider = FakeProvider({}, redirect_uri="https://api.example.com/auth/google/callback")
-    service = AuthService({"google": provider}, UserRepository(session), issuer)
+    service = AuthService(
+        {"google": provider},
+        UserRepository(session),
+        issuer,
+        login_codes=LoginCodeStore(redis),
+        frontend_url=FRONTEND_URL,
+    )
     app.dependency_overrides[get_auth_service] = lambda: service
     try:
         response = TestClient(app).get("/auth/google/login", follow_redirects=False)
@@ -145,31 +156,69 @@ def test_refresh_token_is_stored_in_redis_until_expiry(
 
 
 @pytest.mark.feature("F1-6")
-def test_callback_response_is_not_cached(client: TestClient) -> None:
-    start = client.get("/auth/google/login", follow_redirects=False)
-    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+def test_callback_redirects_to_frontend_with_login_code_only(client: TestClient) -> None:
+    response = callback(client)
 
-    response = client.get("/auth/google/callback", params={"code": "code-a", "state": state})
-
+    params = frontend_params(response)
+    assert list(params) == ["login_code"]  # 토큰은 URL 에 싣지 않는다
+    assert len(params["login_code"]) >= 32
     assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.feature("F1-6")
-def test_non_ascii_state_returns_400_not_500(client: TestClient) -> None:
-    client.get("/auth/google/login", follow_redirects=False)
+def test_login_code_is_exchanged_for_tokens_without_cache(client: TestClient) -> None:
+    login_code = frontend_params(callback(client))["login_code"]
 
-    response = client.get("/auth/google/callback", params={"code": "code-a", "state": "é"})
+    response = client.post("/auth/token", json={"login_code": login_code})
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "OAUTH_STATE_MISMATCH"
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert claims(response.json()["access_token"])["type"] == "access"
 
 
 @pytest.mark.feature("F1-6")
-def test_callback_deletes_state_cookie(client: TestClient) -> None:
-    start = client.get("/auth/google/login", follow_redirects=False)
-    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+def test_login_code_can_be_used_only_once(client: TestClient) -> None:
+    login_code = frontend_params(callback(client))["login_code"]
+    client.post("/auth/token", json={"login_code": login_code})
 
-    response = client.get("/auth/google/callback", params={"code": "code-a", "state": state})
+    response = client.post("/auth/token", json={"login_code": login_code})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "LOGIN_CODE_INVALID"
+
+
+@pytest.mark.feature("F1-6")
+def test_unknown_login_code_returns_401(client: TestClient) -> None:
+    response = client.post("/auth/token", json={"login_code": "never-issued"})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "LOGIN_CODE_INVALID"
+
+
+@pytest.mark.feature("F1-6")
+def test_login_code_expires_within_a_minute(client: TestClient, redis: fakeredis.FakeRedis) -> None:
+    login_code = frontend_params(callback(client))["login_code"]
+
+    assert 55 <= redis.ttl(f"login_code:{login_code}") <= 60
+
+
+@pytest.mark.feature("F1-6")
+def test_non_ascii_state_redirects_with_state_mismatch_not_500(client: TestClient) -> None:
+    start_state(client)
+
+    response = client.get(
+        "/auth/google/callback",
+        params={"code": "code-a", "state": "é"},
+        follow_redirects=False,
+    )
+
+    assert frontend_params(response) == {"error": "OAUTH_STATE_MISMATCH"}
+
+
+@pytest.mark.feature("F1-6")
+@pytest.mark.parametrize("code", ["code-a", "forged"], ids=["success", "failure"])
+def test_callback_deletes_state_cookie(client: TestClient, code: str) -> None:
+    response = callback(client, code)
 
     assert 'oauth_state=""' in response.headers["set-cookie"]
     assert "Max-Age=0" in response.headers["set-cookie"]
@@ -177,44 +226,46 @@ def test_callback_deletes_state_cookie(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-6")
 @pytest.mark.parametrize("cookie_state", [None, "other-state"], ids=["no-cookie", "mismatch"])
-def test_callback_with_wrong_state_returns_400(
+def test_callback_with_wrong_state_redirects_with_error(
     client: TestClient, session: Session, cookie_state: str | None
 ) -> None:
     if cookie_state is not None:
         client.cookies.set("oauth_state", cookie_state, path="/auth")
 
-    response = client.get("/auth/google/callback", params={"code": "code-a", "state": "s"})
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "OAUTH_STATE_MISMATCH"
-    assert user_count(session) == 0
-
-
-@pytest.mark.feature("F1-6")
-def test_rejected_code_returns_401_without_creating_user(
-    client: TestClient, session: Session
-) -> None:
-    start = client.get("/auth/google/login", follow_redirects=False)
-    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
-
-    response = client.get("/auth/google/callback", params={"code": "forged", "state": state})
-
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "OAUTH_FAILED"
-    assert user_count(session) == 0
-
-
-@pytest.mark.feature("F1-6")
-def test_cancelled_consent_returns_401(client: TestClient) -> None:
-    start = client.get("/auth/google/login", follow_redirects=False)
-    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
-
     response = client.get(
-        "/auth/google/callback", params={"error": "access_denied", "state": state}
+        "/auth/google/callback", params={"code": "code-a", "state": "s"}, follow_redirects=False
     )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "OAUTH_FAILED"
+    assert frontend_params(response) == {"error": "OAUTH_STATE_MISMATCH"}
+    assert user_count(session) == 0
+
+
+@pytest.mark.feature("F1-6")
+def test_rejected_code_redirects_with_error_without_creating_user(
+    client: TestClient, session: Session
+) -> None:
+    response = callback(client, "forged")
+
+    assert frontend_params(response) == {"error": "OAUTH_FAILED"}
+    assert user_count(session) == 0
+
+
+@pytest.mark.feature("F1-6")
+def test_cancelled_consent_redirects_with_error(client: TestClient) -> None:
+    state = start_state(client)
+
+    response = client.get(
+        "/auth/google/callback",
+        params={"error": "access_denied", "state": state},
+        follow_redirects=False,
+    )
+
+    assert frontend_params(response) == {"error": "OAUTH_FAILED"}
+
+
+@pytest.mark.feature("F1-6")
+def test_provider_outage_redirects_with_error(client: TestClient) -> None:
+    assert frontend_params(callback(client, OUTAGE_CODE)) == {"error": "OAUTH_UNAVAILABLE"}
 
 
 @pytest.mark.feature("F1-6")
@@ -253,3 +304,20 @@ def test_concurrent_first_login_returns_existing_user(session: Session) -> None:
     assert created is False
     assert (user.provider, user.provider_id) == ("google", "google-sub-a")
     assert user_count(session) == 1
+
+
+@pytest.mark.feature("F1-6")
+@pytest.mark.parametrize(
+    ("origin", "allowed"),
+    [("http://localhost:5173", True), ("http://evil.example", False)],
+    ids=["frontend", "other-site"],
+)
+def test_only_frontend_origin_can_call_api_from_browser(
+    client: TestClient, origin: str, allowed: bool
+) -> None:
+    response = client.options(
+        "/auth/token",
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"},
+    )
+
+    assert (response.headers.get("access-control-allow-origin") == origin) is allowed

@@ -1,5 +1,5 @@
-"""인증 API: 소셜 로그인 (F1-6, 콜백은 JSON 응답 Q-16), 토큰 재발급 (F1-4), 로그아웃 (F1-5),
-내 정보·프로필 (F1-7)."""
+"""인증 API: 소셜 로그인 (F1-6, 콜백은 프론트로 리다이렉트 Q-16), 토큰 재발급 (F1-4),
+로그아웃 (F1-5), 내 정보·프로필 (F1-7)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth.schemas import LoginOut, ProfileIn, RefreshIn, TokenOut, UserOut
+from app.auth.schemas import LoginCodeIn, LoginOut, ProfileIn, RefreshIn, TokenOut, UserOut
 from app.auth.service import (
+    LOGIN_FAILURES,
     AuthService,
     CurrentToken,
     UserService,
@@ -43,17 +44,35 @@ def login(provider: str, service: Service) -> RedirectResponse:
     return response
 
 
-@router.get("/{provider}/callback", response_model=LoginOut)
+@router.get("/{provider}/callback", status_code=302, response_class=RedirectResponse)
 def callback(
     provider: str,
-    response: Response,
     service: Service,
     code: str | None = None,
     state: str | None = None,
     oauth_state: Annotated[str | None, Cookie()] = None,
-) -> LoginOut:
-    result = service.complete_login(provider, code, state, oauth_state)
-    response.delete_cookie(STATE_COOKIE, path="/auth")  # state 는 한 번만 쓴다
+) -> RedirectResponse:
+    """제공자에서 돌아온 브라우저를 프론트로 보낸다.
+
+    성공은 `?login_code=...`(60초, 한 번만 사용), 실패는 `?error=OAUTH_FAILED` 같은 에러 코드.
+    """
+    try:
+        url = service.complete_login(provider, code, state, oauth_state)
+    except LOGIN_FAILURES as exc:
+        url = service.failed_login_url(exc.code)
+    response = RedirectResponse(url, status_code=302)
+    response.delete_cookie(STATE_COOKIE, path="/auth")  # state 는 성공·실패와 관계없이 한 번만 쓴다
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.post("/token", response_model=LoginOut)
+def exchange_login_code(body: LoginCodeIn, response: Response, service: Service) -> LoginOut:
+    """콜백이 프론트로 넘긴 `login_code` 를 토큰으로 바꾼다.
+
+    만료됐거나 이미 쓴 코드는 401 `LOGIN_CODE_INVALID`.
+    """
+    result = service.exchange_login_code(body.login_code)
     response.headers["Cache-Control"] = "no-store"  # 본문에 토큰이 있어 캐시하지 않는다
     return LoginOut.from_result(result)
 

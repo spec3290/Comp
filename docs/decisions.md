@@ -48,7 +48,7 @@
   - 재발급(F1-4): `POST /auth/refresh` 본문 `{ "refresh_token": "..." }` → `{ access_token, refresh_token, token_type, expires_in }`. 탈퇴한 회원의 Refresh는 `TOKEN_INVALID`.
   - 내 정보(F1-7): `GET /users/me` → `{ id, provider, nickname, grade, school_type, interest_fields, needs_onboarding, created_at }` (`provider_id`는 내보내지 않음). `PUT /users/me/profile` 본문 `{ nickname, grade?, school_type, interest_fields }`(전체 교체, 응답은 `GET /users/me`와 같음). 값이 규칙(Q-5)을 어기면 400 `VALIDATION_ERROR`, 닉네임이 다른 회원과 겹치면 409 `NICKNAME_TAKEN`. `interest_fields`는 어휘 정의 순서로 정렬해 돌려준다.
   - 에러 본문은 `{ "error": { "code": "CONTEST_CLOSED", "message": "..." } }` 하나. 400 `VALIDATION_ERROR`, 401 토큰 오류, 404 `NOT_FOUND`, 409 상태 충돌(`CONTEST_CLOSED` 등), 500은 상세를 로그에만 남긴다.
-  - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 성공 시 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }` JSON(Q-16). state 불일치·누락은 400 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 401 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 502 `OAUTH_UNAVAILABLE`, 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
+  - 소셜 로그인(F1-6): `login`은 제공자 동의 화면으로 302 리다이렉트하고 state를 `oauth_state` 쿠키(HttpOnly, SameSite=Lax, Path=/auth, 10분)에 담는다. `callback`은 브라우저를 `FRONTEND_LOGIN_REDIRECT_URL`로 302 리다이렉트한다(Q-16). 성공하면 `?login_code=...`(Redis `login_code:{code}`에 회원 id, 60초, 한 번만 사용)를 붙이고, 프론트가 `POST /auth/token` 본문 `{ "login_code": "..." }`로 교환하면 `{ access_token, refresh_token, token_type: "bearer", expires_in, needs_onboarding }`을 받는다(`Cache-Control: no-store`). 만료·재사용·없는 코드는 401 `LOGIN_CODE_INVALID`. 콜백 실패는 JSON 대신 `?error=<코드>`로 프론트에 알린다: state 불일치·누락은 `OAUTH_STATE_MISMATCH`, 제공자가 코드를 거절하거나 사용자가 취소하면 `OAUTH_FAILED`, 제공자 장애나 형식이 깨진 응답은 `OAUTH_UNAVAILABLE`. state 쿠키는 성공·실패 모두 지운다. 지원하지 않거나 클라이언트 ID·시크릿이 설정되지 않은 제공자는 404 `NOT_FOUND`. state 쿠키의 `Secure`는 요청 scheme이 아니라 콜백 주소(`GOOGLE_REDIRECT_URI`)가 https인지로 정한다(TLS를 끝내는 프록시 뒤에서도 유지).
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `field`, `q`, `education`, `team_type`, `region`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `eligibility_check_needed: true`로 표시.
     - 현재 구현(F2-3): `sort`, `status`, `field`(분야 텍스트 부분 일치, 대소문자 무시), `q`(제목 부분 일치, 최대 100자). 기본 `size=20`.
@@ -61,7 +61,7 @@
 
 | 기능 | 메서드·경로 | 인증 |
 |---|---|---|
-| F1-6 | `GET /auth/{provider}/login`, `GET /auth/{provider}/callback` (`provider`: google/kakao) | 없음 |
+| F1-6 | `GET /auth/{provider}/login`, `GET /auth/{provider}/callback` (`provider`: google/kakao), `POST /auth/token` (본문 `login_code`) | 없음 |
 | F1-4 | `POST /auth/refresh` (본문 `refresh_token`) | Refresh |
 | F1-5 | `POST /auth/logout` → 204 | Access |
 | F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
@@ -82,6 +82,7 @@
 | users | id, provider, provider_id, nickname, grade(smallint), school_type, created_at. `UNIQUE(provider, provider_id)`, `UNIQUE(nickname)`(NULL 여럿 허용), 프로필 미설정이면 nickname NULL |
 | user_interest_fields | `PK(user_id, field)`, user_id는 users FK `ON DELETE CASCADE` |
 | refresh_tokens (Redis) | 테이블 없이 `refresh:{jti}` 해시: user_id, family_id. 만료는 Redis TTL (Q-4) |
+| login_codes (Redis) | `login_code:{code}` 문자열: user_id. 60초 TTL, 교환 때 GETDEL로 지운다 (Q-16) |
 | access_token_blacklist (Redis) | 테이블 없이 `blacklist:{jti}`. 만료는 Redis TTL이라 정리 작업이 없다 (Q-17) |
 | contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, eligibility_text, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
 | contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
@@ -136,7 +137,7 @@
 | Q-13 | 저장소를 MongoDB(pymongo)로 바꾸나, PostgreSQL(SQLAlchemy)과 함께 쓰나? AGENTS.md 스택·ADR-0005는 PostgreSQL+Alembic 기준이다 | 전체 (ADR-0005) | PostgreSQL 메인 + MongoDB(대회 데이터·벡터) → ADR-0008 | 결정됨 |
 | Q-14 | Dev Event에서 접수 기간 없이 행사 당일 일정(`DATE`)만 있는 대회의 접수 마감일은? | F2-1, F2-3 | 행사 시작일을 접수 마감일로 간주 | 결정됨 |
 | Q-15 | 링커리어 공모전은 분야 제한 없이(네이밍·사진·UCC 등 포함) 모두 수집하나, 개발·AI·보안·디자인·아이디어 등 특정 카테고리만 수집하나? | F2-1, F3-1 | 과학/공학(35)·기획/아이디어(28) 카테고리만 수집. 링커리어에 IT/소프트웨어 카테고리가 따로 없어 개발 대회는 주로 이 둘에 있음. 창업·학술·디자인·게임 등은 제외 | 결정됨 |
-| Q-16 | 소셜 로그인 콜백이 서비스 JWT를 클라이언트에 어떻게 전달하나? (JSON 응답 / 프론트로 리다이렉트 / 프론트가 code를 POST) | F1-6 (ADR-0004) | 콜백이 JSON으로 응답. 프론트엔드가 생기면 리다이렉트 방식을 다시 검토 | 결정됨 |
+| Q-16 | 소셜 로그인 콜백이 서비스 JWT를 클라이언트에 어떻게 전달하나? (JSON 응답 / 프론트로 리다이렉트 / 프론트가 code를 POST) | F1-6 (ADR-0004) | 콜백이 프론트(`FRONTEND_LOGIN_REDIRECT_URL`, 기본 `http://localhost:5173/auth/callback`)로 리다이렉트하며 일회용 `login_code`(60초)만 넘기고, 프론트가 `POST /auth/token`으로 토큰을 받는다. URL·브라우저 기록에 토큰이 남지 않는다 (2026-10-28 사용자 결정, 이전: 콜백 JSON 응답) | 결정됨 |
 | Q-17 | 로그아웃 시 Access Token 블랙리스트 저장소는? | F1-5 (ADR-0002) | Refresh와 같은 Redis에 `blacklist:{jti}`를 Access 남은 만료만큼 TTL로 저장 (사용자 결정) | 결정됨 |
 | Q-18 | 접수가 마감된 대회도 저장(북마크)할 수 있나? | F2-7 | 409 `CONTEST_CLOSED`로 거절한다(마감 당일까지는 허용). 해제·목록 조회는 항상 가능하고, 저장 후 마감된 대회는 목록에 `closed`로 남는다 | 결정됨 |
 | Q-19 | 자격 태그의 분야 차원(개발·AI·보안·디자인·아이디어)도 키워드 규칙으로 분류하나? | F3-1, F3-3 | 1차에서는 분류하지 않는다. 분야는 키워드로 정확히 가르기 어렵고 잘못된 태그는 대회를 필터에서 숨긴다. 학력·참가 형태·지역만 태그로 두고, 기존 `field`(원문 분야 텍스트 검색)는 유지. 분야 태그는 F6-4(LLM 분류 보조) 때 다시 검토 (사용자 결정) | 결정됨 |

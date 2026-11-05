@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.auth.repository import TokenStore, UserRepository
+from app.auth.repository import LoginCodeStore, TokenStore, UserRepository
 from app.auth.service import (
     AuthService,
     CurrentToken,
@@ -23,7 +23,14 @@ from app.auth.tokens import TokenIssuer
 from app.core.errors import install_error_handlers
 from app.core.sql import Base
 from app.main import app
-from tests.unit.auth_support import ACCESS_TTL, CODES, REFRESH_TTL, SECRET, FakeProvider
+from tests.unit.auth_support import (
+    ACCESS_TTL,
+    CODES,
+    FRONTEND_URL,
+    REFRESH_TTL,
+    SECRET,
+    FakeProvider,
+)
 
 
 @pytest.fixture
@@ -48,11 +55,15 @@ def issuer(redis: fakeredis.FakeRedis) -> TokenIssuer:
 
 
 @pytest.fixture
-def client(session: Session, issuer: TokenIssuer) -> Iterator[TestClient]:
+def client(
+    session: Session, redis: fakeredis.FakeRedis, issuer: TokenIssuer
+) -> Iterator[TestClient]:
     service = AuthService(
         providers={"google": FakeProvider(CODES)},
         users=UserRepository(session),
         issuer=issuer,
+        login_codes=LoginCodeStore(redis),
+        frontend_url=FRONTEND_URL,
     )
     app.dependency_overrides[get_auth_service] = lambda: service
     app.dependency_overrides[get_token_issuer] = lambda: issuer

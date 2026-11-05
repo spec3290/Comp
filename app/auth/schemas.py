@@ -43,6 +43,10 @@ class LoginOut(TokenOut):
         return cls(**tokens.model_dump(), needs_onboarding=result.needs_onboarding)
 
 
+class LoginCodeIn(BaseModel):
+    login_code: str = Field(min_length=1, max_length=128, description="콜백이 프론트로 넘긴 값")
+
+
 class RefreshIn(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=2048)
 
