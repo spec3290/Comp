@@ -80,6 +80,9 @@ def parse_period(text: str) -> tuple[date, date]:
     m1, d1, y1, m2, d2, y2 = match.group("m1", "d1", "y1", "m2", "d2", "y2")
     end = date(int(y2), _MONTHS[m2 or m1], int(d2 or d1))
     start = date(int(y1 or y2), _MONTHS[m1], int(d1))
+    # "Dec 20 - Jan 05, 2027" 처럼 연도를 넘기면서 시작 연도를 생략한 경우
+    if y1 is None and start > end:
+        start = start.replace(year=start.year - 1)
     return start, end
 
 

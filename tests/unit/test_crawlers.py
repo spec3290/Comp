@@ -204,6 +204,7 @@ def test_devpost_http_error_raises() -> None:
         ("Nov 01 - 05, 2026", (date(2026, 11, 1), date(2026, 11, 5))),
         ("Jul 16, 2026 - Jan 15, 2027", (date(2026, 7, 16), date(2027, 1, 15))),
         ("Dec 31, 2026", (date(2026, 12, 31), date(2026, 12, 31))),
+        ("Dec 20 - Jan 05, 2027", (date(2026, 12, 20), date(2027, 1, 5))),
     ],
 )
 def test_devpost_parses_submission_period(text: str, expected: tuple[date, date]) -> None:
