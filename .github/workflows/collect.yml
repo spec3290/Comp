@@ -1,0 +1,30 @@
+name: collect
+
+# 대회 수집(F2-1)을 하루 1회 실행한다 (docs/decisions.md Q-21).
+# 저장소 Settings > Secrets and variables > Actions 에 MONGODB_URI(Atlas 접속 URI)를 넣어야 한다.
+# 소스 하나라도 실패하면 수집 명령이 1로 끝나 이 실행이 실패로 표시된다. 기존 데이터는 유지된다.
+on:
+  schedule:
+    - cron: "0 21 * * *" # 매일 06:00 KST (cron 은 UTC 기준)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --no-dev
+      - name: 대회 수집
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: ${{ vars.MONGODB_DB || 'contest' }}
+        run: uv run --no-dev python -m app.contests.collect
