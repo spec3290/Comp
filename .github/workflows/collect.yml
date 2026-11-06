@@ -8,6 +8,9 @@ name: collect
 # API 키에는 프로젝트 역할 Project Network Access Manager 만 준다.
 # 러너 IP는 미리 알 수 없으므로 조직 설정 "Require IP Access List for the Atlas Administration API"가
 # 꺼져 있고 API 키에 접근 목록이 없어야 한다. 켜져 있으면 등록 단계가 403으로 실패하고 수집은 돌지 않는다.
+# Atlas API 가 실패하면 로그의 errorCode 로 원인을 가린다 (scripts/atlas_api.sh). 403 의 흔한 경우:
+#   IP_ADDRESS_NOT_ON_ACCESS_LIST  조직의 API 접근 목록 요구가 켜져 있다
+#   USER_UNAUTHORIZED              키에 이 프로젝트(ATLAS_PROJECT_ID) 역할이 없거나 권한이 모자란다
 # 소스 하나라도 실패하면 수집 명령이 1로 끝나 이 실행이 실패로 표시된다. 기존 데이터는 유지된다.
 on:
   schedule:
@@ -37,17 +40,17 @@ jobs:
         env:
           ATLAS_AUTH: ${{ secrets.ATLAS_PUBLIC_KEY }}:${{ secrets.ATLAS_PRIVATE_KEY }}
         run: |
+          source scripts/atlas_api.sh
           ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
           # 정리 단계가 돌지 못해도 Atlas가 1시간 뒤 스스로 지운다.
           expire="$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)"
-          curl -sS --fail-with-body --digest -u "$ATLAS_AUTH" -H "$ATLAS_ACCEPT" -H "Content-Type: application/json" \
-            -X POST "$ATLAS_API" \
-            -d "[{\"ipAddress\":\"$ip\",\"comment\":\"github-actions collect\",\"deleteAfterDate\":\"$expire\"}]" \
-            > /dev/null
+          atlas_api POST "$ATLAS_API" \
+            -d"[{\"ipAddress\":\"$ip\",\"comment\":\"github-actions collect\",\"deleteAfterDate\":\"$expire\"}]"
           echo "RUNNER_IP=$ip" >> "$GITHUB_ENV"
           # 등록 직후에는 PENDING 이라 ACTIVE 가 될 때까지 기다린다.
           for _ in $(seq 1 30); do
-            status="$(curl -sS --fail-with-body --digest -u "$ATLAS_AUTH" -H "$ATLAS_ACCEPT" "$ATLAS_API/$ip/status" | jq -r .STATUS)"
+            atlas_api GET "$ATLAS_API/$ip/status"
+            status="$(jq -r .STATUS "$ATLAS_BODY")"
             echo "access list: $status"
             [ "$status" = "ACTIVE" ] && exit 0
             sleep 10
@@ -64,4 +67,5 @@ jobs:
         env:
           ATLAS_AUTH: ${{ secrets.ATLAS_PUBLIC_KEY }}:${{ secrets.ATLAS_PRIVATE_KEY }}
         run: |
-          curl -sS --fail-with-body --digest -u "$ATLAS_AUTH" -H "$ATLAS_ACCEPT" -X DELETE "$ATLAS_API/$RUNNER_IP" > /dev/null
+          source scripts/atlas_api.sh
+          atlas_api DELETE "$ATLAS_API/$RUNNER_IP"
