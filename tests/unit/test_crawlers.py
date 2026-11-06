@@ -190,6 +190,39 @@ def test_devpost_skips_offline_invite_only_and_broken_hackathons() -> None:
 
 
 @pytest.mark.feature("F2-1")
+@pytest.mark.parametrize(
+    ("icon", "location", "collected"),
+    [
+        ("globe", "Online", True),
+        ("map-marker-alt", "Online", True),
+        ("map-marker-alt", "Santa Clara Convention Center + Online", True),
+        ("map-marker-alt", "Seoul, South Korea", True),
+        ("map-marker-alt", "Gasan digital 1-ro, South Korea", True),
+        ("map-marker-alt", "Pangyo", True),
+        ("map-marker-alt", "Goyang-si, Gyeonggi-do", True),
+        ("map-marker-alt", "Gangnam Classroom in Seoul", True),
+        ("map-marker-alt", "서울 성수동", True),
+        ("map-marker-alt", "San Francisco, California, USA", False),
+        ("map-marker-alt", "Singapore", False),
+        ("map-marker-alt", "LG CNS", False),
+        ("map-marker-alt", "", False),
+    ],
+)
+def test_devpost_collects_online_or_offline_in_korea_only(
+    icon: str, location: str, collected: bool
+) -> None:
+    item = _hackathon(1, displayed_location={"icon": icon, "location": location})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        found = [item] if request.url.params["status[]"] == "open" else []
+        return httpx.Response(200, json={"hackathons": found, "meta": {"total_count": len(found)}})
+
+    contests = DevpostSource(_client(handler), delay_seconds=0).fetch()
+
+    assert bool(contests) is collected
+
+
+@pytest.mark.feature("F2-1")
 def test_devpost_http_error_raises() -> None:
     source = DevpostSource(_client(lambda _: httpx.Response(503)), delay_seconds=0)
     with pytest.raises(httpx.HTTPStatusError):
