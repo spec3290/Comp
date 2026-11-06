@@ -1,7 +1,8 @@
 """Devpost 크롤러. devpost.com 해커톤 목록 페이지가 쓰는 공개 JSON API 로 받는다.
 
 해커톤마다 Devpost 안에 공식 참가 페이지(`https://{slug}.devpost.com/`)가 있어 그대로
-참가 URL 로 쓴다. 국내 사용자가 참가할 수 있게 온라인 · 공개 해커톤만 고른다 (Q-20).
+참가 URL 로 쓴다. 국내 사용자가 참가할 수 있게 공개 해커톤 중 온라인이거나 한국에서 열리는
+오프라인 해커톤만 고른다 (Q-20).
 제출 기간 안에는 언제든 등록·참가할 수 있어 제출 기간을 접수 기간으로 쓴다.
 """
 
@@ -25,6 +26,14 @@ DEFAULT_HOST = "Devpost"
 STATUSES = ("open", "upcoming")
 MAX_PAGES = 40  # 상태별. 한 페이지에 9건씩 온다
 ONLINE_ICON = "globe"
+# 개최지는 국가 필드 없이 자유 텍스트라("Seoul, South Korea", "Pangyo", "LG CNS") 한국 지명이
+# 보이는 것만 국내로 본다. 장소명만 있는 국내 행사는 놓치지만 해외 행사를 넣지는 않는다.
+_ONLINE = re.compile(r"(?:^|\+\s*)online$", re.IGNORECASE)
+_KOREA = re.compile(
+    r"\b(?:korea|seoul|busan|incheon|daegu|daejeon|gwangju|ulsan|sejong|suwon|seongnam|"
+    r"pangyo|gangnam|jeju|pohang|changwon|cheongju|jeonju)\b|[\uac00-\ud7a3]",
+    re.IGNORECASE,
+)
 
 _MONTHS = {
     name: number
@@ -86,8 +95,14 @@ def parse_period(text: str) -> tuple[date, date]:
     return start, end
 
 
+def _is_reachable(location: dict[str, Any]) -> bool:
+    """온라인(하이브리드 포함)이거나 개최지가 한국이면 참가할 수 있다고 본다."""
+    text = (location.get("location") or "").strip()
+    return location.get("icon") == ONLINE_ICON or bool(_ONLINE.search(text) or _KOREA.search(text))
+
+
 def _to_contest(item: dict[str, Any]) -> RawContest | None:
-    if item.get("invite_only") or item["displayed_location"].get("icon") != ONLINE_ICON:
+    if item.get("invite_only") or not _is_reachable(item["displayed_location"]):
         return None
     start, end = parse_period(item["submission_period_dates"])
     url = item["url"]
