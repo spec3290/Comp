@@ -30,8 +30,11 @@ ONLINE_ICON = "globe"
 # 보이는 것만 국내로 본다. 장소명만 있는 국내 행사는 놓치지만 해외 행사를 넣지는 않는다.
 _ONLINE = re.compile(r"(?:^|\+\s*)online$", re.IGNORECASE)
 _KOREA = re.compile(
-    r"\b(?:korea|seoul|busan|incheon|daegu|daejeon|gwangju|ulsan|sejong|suwon|seongnam|"
-    r"pangyo|gangnam|jeju|pohang|changwon|cheongju|jeonju)\b|[\uac00-\ud7a3]",
+    r"\b(?:korea|seoul|busan|incheon|daegu|daejeon|gwangju|ulsan|sejong|"
+    r"gyeonggi|gangwon|chungcheong|chungbuk|chungnam|jeolla|jeonbuk|jeonnam|"
+    r"gyeongsang|gyeongbuk|gyeongnam|jeju|"
+    r"suwon|seongnam|goyang|yongin|hwaseong|bucheon|ansan|anyang|cheonan|"
+    r"pangyo|gangnam|pohang|changwon|cheongju|jeonju)\b|[\uac00-\ud7a3]",
     re.IGNORECASE,
 )
 
