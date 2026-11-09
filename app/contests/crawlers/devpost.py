@@ -28,12 +28,13 @@ MAX_PAGES = 40  # 상태별. 한 페이지에 9건씩 온다
 ONLINE_ICON = "globe"
 # 개최지는 국가 필드 없이 자유 텍스트라("Seoul, South Korea", "Pangyo", "LG CNS") 한국 지명이
 # 보이는 것만 국내로 본다. 장소명만 있는 국내 행사는 놓치지만 해외 행사를 넣지는 않는다.
+# 안양(Anyang)은 중국 허난성에도 있어 단독으로는 넣지 않는다. Gyeonggi·Korea 가 함께 있으면 잡힌다.
 _ONLINE = re.compile(r"(?:^|\+\s*)online$", re.IGNORECASE)
 _KOREA = re.compile(
     r"\b(?:korea|seoul|busan|incheon|daegu|daejeon|gwangju|ulsan|sejong|"
     r"gyeonggi|gangwon|chungcheong|chungbuk|chungnam|jeolla|jeonbuk|jeonnam|"
     r"gyeongsang|gyeongbuk|gyeongnam|jeju|"
-    r"suwon|seongnam|goyang|yongin|hwaseong|bucheon|ansan|anyang|cheonan|"
+    r"suwon|seongnam|goyang|yongin|hwaseong|bucheon|ansan|cheonan|"
     r"pangyo|gangnam|pohang|changwon|cheongju|jeonju)\b|[\uac00-\ud7a3]",
     re.IGNORECASE,
 )
