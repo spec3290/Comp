@@ -124,7 +124,6 @@ def _to_contest(item: dict[str, Any]) -> RawContest | None:
         apply_end=end,
         event_start=start,
         event_end=end,
-        eligibility_text="",
         apply_url=url,
         source=NAME,
         source_url=url,

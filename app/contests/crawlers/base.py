@@ -29,7 +29,6 @@ class RawContest:
     apply_end: date
     event_start: date | None
     event_end: date | None
-    eligibility_text: str
     apply_url: str
     source: str
     source_url: str

@@ -1,6 +1,6 @@
 """대회 수집 실행 진입점: `uv run python -m app.contests.collect`
 
-수집한 대회는 중복 제거(F2-2)와 자격 분류(F3-1, 규칙은 `qualification_rules.toml`)를 거쳐
+수집한 대회는 중복 제거(F2-2)와 분야·형식 분류(F3-1, 규칙은 `classification_rules.toml`)를 거쳐
 저장한다. 수집이 끝나면 마감 3일이 지난 대회를 지운다 (Q-3).
 하루 1회 GitHub Actions(`.github/workflows/collect.yml`)가 이 명령을 실행한다 (Q-21).
 """

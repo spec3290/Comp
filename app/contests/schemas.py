@@ -6,20 +6,19 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from app.contests.rules import ContestStatus, Dimension, EligibilityTags
+from app.contests.rules import ContestStatus, ContestTags, Dimension
 from app.contests.service import BookmarkPage, BookmarkView, ContestPage, ContestView
 
 
-class EligibilityTagsOut(BaseModel):
-    """분류된 자격 태그 (F3-1). 빈 목록은 그 차원이 미분류라는 뜻이다."""
+class ContestTagsOut(BaseModel):
+    """분류된 분야·형식 태그 (F3-1). 빈 목록은 그 차원이 미분류라는 뜻이다."""
 
-    education: list[str]
-    team_type: list[str]
-    region: list[str]
+    field: list[str]
+    format: list[str]
 
     @classmethod
-    def from_tags(cls, tags: EligibilityTags) -> EligibilityTagsOut:
-        """자격 태그로 응답을 만든다."""
+    def from_tags(cls, tags: ContestTags) -> ContestTagsOut:
+        """분류 태그로 응답을 만든다."""
         return cls(**{d.value: tags.ordered(d) for d in Dimension})
 
 
@@ -38,8 +37,8 @@ class ContestSummaryOut(BaseModel):
     event_end: date | None
     apply_url: str
     source_url: str
-    eligibility_tags: EligibilityTagsOut
-    eligibility_check_needed: bool
+    tags: ContestTagsOut
+    tag_check_needed: bool
 
     @classmethod
     def from_view(cls, view: ContestView) -> ContestSummaryOut:
@@ -58,15 +57,14 @@ class ContestSummaryOut(BaseModel):
             event_end=r.event_end,
             apply_url=r.apply_url,
             source_url=r.source_url,
-            eligibility_tags=EligibilityTagsOut.from_tags(r.tags),
-            eligibility_check_needed=view.eligibility_check_needed,
+            tags=ContestTagsOut.from_tags(r.tags),
+            tag_check_needed=view.tag_check_needed,
         )
 
 
 class ContestDetailOut(ContestSummaryOut):
-    """대회 상세 응답. 자격 원문과 출처를 더한다."""
+    """대회 상세 응답. 수집 출처를 더한다."""
 
-    eligibility_text: str
     sources: list[str]
 
     @classmethod
@@ -75,7 +73,6 @@ class ContestDetailOut(ContestSummaryOut):
         summary = ContestSummaryOut.from_view(view)
         return cls(
             **summary.model_dump(),
-            eligibility_text=view.record.eligibility_text,
             sources=list(view.record.sources),
         )
 

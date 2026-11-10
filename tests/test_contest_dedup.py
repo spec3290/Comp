@@ -31,7 +31,6 @@ def _contest(source: str, title: str = "2026 AI 해커톤", host: str = "주최�
         apply_end=date(2026, 11, 1),
         event_start=None,
         event_end=None,
-        eligibility_text="",
         apply_url=f"https://{source}.example.com/apply",
         source=source,
         source_url=f"https://{source}.example.com/contests/1",

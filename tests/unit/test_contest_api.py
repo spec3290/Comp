@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.contests.repository import ContestRecord, ContestRepository
 from app.contests.router import today_kst
-from app.contests.rules import NO_TAGS, ContestQuery, ContestStatus, EligibilityTags, SortOrder
+from app.contests.rules import NO_TAGS, ContestQuery, ContestStatus, ContestTags, SortOrder
 from app.contests.service import ContestQueryService, get_query_service
 from app.main import app
 
@@ -19,7 +19,7 @@ def _record(
     contest_id: str,
     apply_start: date | None,
     apply_end: date,
-    tags: EligibilityTags = NO_TAGS,
+    tags: ContestTags = NO_TAGS,
 ) -> ContestRecord:
     """접수 기간·태그만 다른 테스트용 대회."""
     return ContestRecord(
@@ -31,7 +31,6 @@ def _record(
         apply_end=apply_end,
         event_start=None,
         event_end=None,
-        eligibility_text="대상: 대학생",
         apply_url="https://example.com/apply",
         source_url="https://example.com",
         sources=("dacon", "linkareer"),
@@ -67,7 +66,7 @@ def repo() -> FakeRepository:
                 "a",
                 date(2026, 10, 1),
                 date(2026, 10, 30),
-                EligibilityTags(education=frozenset({"대학생"}), team_type=frozenset({"팀"})),
+                ContestTags(field=frozenset({"AI", "개발"}), format=frozenset({"해커톤"})),
             ),
             _record("b", date(2026, 11, 1), date(2026, 11, 30)),
             _record("c", None, date(2026, 10, 23)),
@@ -109,7 +108,7 @@ def test_list_computes_status_and_d_day(client: TestClient) -> None:
     assert (items["b"]["status"], items["b"]["d_day"]) == ("upcoming", 38)
     # 시작일이 없으면 접수 중, 마감 당일은 D-0 (Q-6)
     assert (items["c"]["status"], items["c"]["d_day"]) == ("open", 0)
-    assert "eligibility_text" not in items["a"]
+    assert "sources" not in items["a"]
 
 
 @pytest.mark.feature("F2-3")
@@ -125,6 +124,7 @@ def test_list_parses_filters_search_sort_and_paging(
             "sort": "latest",
             "status": "open, closed",
             "field": "AI,보안,",
+            "format": "해커톤",
             "q": "  해커톤 ",
         },
     )
@@ -132,7 +132,7 @@ def test_list_parses_filters_search_sort_and_paging(
     assert res.status_code == 200
     query = repo.queries[0]
     assert query.statuses == {ContestStatus.OPEN, ContestStatus.CLOSED}
-    assert query.fields == ("AI", "보안")
+    assert query.tags == ContestTags(field=frozenset({"AI", "보안"}), format=frozenset({"해커톤"}))
     assert query.keyword == "해커톤"
     assert (query.page, query.size, query.sort) == (3, 50, SortOrder.LATEST)
 
@@ -147,9 +147,8 @@ def test_list_parses_filters_search_sort_and_paging(
         {"sort": "popular"},
         {"status": "open,ended"},
         {"q": "가" * 101},
-        {"education": "대학생,초등학생"},
-        {"team_type": "단체"},
-        {"region": "서울시"},
+        {"field": "AI,게임"},
+        {"format": "챌린지"},
     ],
 )
 def test_list_rejects_invalid_params_with_400(
@@ -163,13 +162,13 @@ def test_list_rejects_invalid_params_with_400(
 
 
 @pytest.mark.feature("F2-4")
-def test_detail_returns_eligibility_sources_and_d_day(client: TestClient) -> None:
-    """상세는 자격 원문·출처·D-day 를 돌려준다."""
+def test_detail_returns_sources_and_d_day(client: TestClient) -> None:
+    """상세는 출처·D-day 를 돌려주고 참가 자격 원문은 없다 (Q-23)."""
     res = client.get("/contests/a")
 
     assert res.status_code == 200
     body = res.json()
-    assert body["eligibility_text"] == "대상: 대학생"
+    assert "eligibility_text" not in body
     assert body["sources"] == ["dacon", "linkareer"]
     assert (body["status"], body["d_day"]) == ("open", 7)
 
@@ -184,36 +183,42 @@ def test_detail_unknown_id_returns_404(client: TestClient) -> None:
 
 
 @pytest.mark.feature("F3-3")
-def test_list_parses_eligibility_filters(client: TestClient, repo: FakeRepository) -> None:
-    """자격 필터 파라미터를 조회 조건으로 바꾼다."""
+def test_list_parses_tag_filters(client: TestClient, repo: FakeRepository) -> None:
+    """분야·형식 필터 파라미터를 조회 조건으로 바꾼다."""
     res = client.get(
-        "/contests",
-        params={"education": "대학생, 제한 없음", "team_type": "팀", "region": "서울,전국"},
+        "/contests", params={"field": "디자인, 아이디어", "format": "공모전,아이디어톤"}
     )
 
     assert res.status_code == 200
-    assert repo.queries[0].eligibility == EligibilityTags(
-        education=frozenset({"대학생", "제한 없음"}),
-        team_type=frozenset({"팀"}),
-        region=frozenset({"서울", "전국"}),
+    assert repo.queries[0].tags == ContestTags(
+        field=frozenset({"디자인", "아이디어"}), format=frozenset({"공모전", "아이디어톤"})
     )
 
 
 @pytest.mark.feature("F3-3")
+def test_list_drops_removed_eligibility_params(client: TestClient, repo: FakeRepository) -> None:
+    """없앤 자격 파라미터(education 등)는 조건에 쓰이지 않는다 (Q-23)."""
+    res = client.get("/contests", params={"education": "대학생", "region": "서울"})
+
+    assert res.status_code == 200
+    assert repo.queries[0].tags == NO_TAGS
+
+
+@pytest.mark.feature("F3-3")
 def test_list_marks_contests_matched_only_as_unclassified(client: TestClient) -> None:
-    """미분류라서 걸린 대회에는 자격 확인 필요를 표시한다."""
-    res = client.get("/contests", params={"education": "대학생"})
+    """미분류라서 걸린 대회에는 분류 확인 필요를 표시한다."""
+    res = client.get("/contests", params={"format": "해커톤"})
 
     items = {item["id"]: item for item in res.json()["items"]}
-    assert items["a"]["eligibility_check_needed"] is False
-    assert items["b"]["eligibility_check_needed"] is True
+    assert items["a"]["tag_check_needed"] is False
+    assert items["b"]["tag_check_needed"] is True
 
 
 @pytest.mark.feature("F2-4")
 def test_detail_returns_classified_tags_in_vocabulary_order(client: TestClient) -> None:
-    """상세는 자격 태그를 어휘 순서로 돌려준다."""
+    """상세는 분야·형식 태그를 어휘 순서로 돌려준다."""
     body = client.get("/contests/a").json()
 
-    assert body["eligibility_tags"] == {"education": ["대학생"], "team_type": ["팀"], "region": []}
-    assert body["eligibility_check_needed"] is False
-    assert client.get("/contests/b").json()["eligibility_check_needed"] is True
+    assert body["tags"] == {"field": ["개발", "AI"], "format": ["해커톤"]}
+    assert body["tag_check_needed"] is False
+    assert client.get("/contests/b").json()["tag_check_needed"] is True

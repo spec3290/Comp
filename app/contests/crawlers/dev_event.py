@@ -66,7 +66,6 @@ def _to_contest(event: dict[str, Any]) -> RawContest | None:
         apply_end=end if recruit else start,
         event_start=None if recruit else start,
         event_end=None if recruit else end,
-        eligibility_text=event.get("description") or "",
         apply_url=link,
         source=NAME,
         source_url=link,
