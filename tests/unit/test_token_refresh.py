@@ -175,7 +175,7 @@ def test_refresh_without_token_returns_400(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-4")
 def test_concurrent_consume_marks_only_one_as_first_use(redis: fakeredis.FakeRedis) -> None:
-    """같은 토큰을 동시에 소비해도 한쪽만 첫 사용이다."""
+    """같은 토큰을 두 번 소비하면 처음만 첫 사용이고 다음은 재사용으로 본다."""
     store = TokenStore(redis)
     store.save("jti-1", 7, "family-1", REFRESH_TTL)
 

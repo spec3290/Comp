@@ -30,7 +30,10 @@ class RedactQueryFilter(logging.Filter):
     """접근 로그에서 토큰·OAuth 코드 같은 쿼리 값을 가리는 로그 필터."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """로그 메시지와 인자를 가린 뒤 항상 통과시킨다."""
+        """인자가 있으면 인자를, 없으면 메시지를 가린 뒤 항상 통과시킨다.
+
+        uvicorn 접속 로그는 쿼리를 인자로 넘기므로 인자만 가리면 된다.
+        """
         if isinstance(record.args, tuple):
             record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
         elif isinstance(record.msg, str):

@@ -34,6 +34,12 @@
 | `uv run lint-imports` | 로컬 실행 불가: Windows 애플리케이션 제어 정책이 grimp DLL을 막음. import 변경이 없으므로 CI 결과로 확인 |
 | `uv run python -m pytest -q` | 228 passed, 16 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀) |
 
+## PR #36 CodeRabbit 리뷰 반영
+- `app/core/log_redaction.py` `RedactQueryFilter.filter`: 인자가 있으면 메시지는 가리지 않는데 "메시지와 인자를 가린다"로 적었다 → 실제 분기대로 고침. 동작은 그대로 둠(접속 로그는 쿼리를 인자로 넘김).
+- `app/contests/service.py` `_collect_one`: "실패하면 로그만 남긴다"였지만 `CollectResult.error`도 채워 돌려준다 → 설명 보강.
+- `tests/unit/test_token_refresh.py` `test_concurrent_consume_...`: 호출이 순차인데 "동시에"라고 적었다 → 두 번 소비로 고침.
+- `code-review` 스킬: `git diff`만으로는 스테이징·새 파일을 놓친다 → `git status` + `git diff HEAD` + 새 파일 직접 읽기로 고침.
+
 ## 하네스 변경
 - `AGENTS.md` 하드 규칙: (1) 새로 쓰거나 고친 모듈·클래스·함수에 한 줄 docstring, (2) 작업이 끝나면 `st/YYYY-MM-DD_{todo}.md`에 code-review 형식으로 리뷰를 남기고 같은 커밋에 넣음. 하네스 구성 표에 `st/` 추가.
 - `feature-implementation`: 5단계에 docstring, 8단계 리뷰 기록 추가(커밋·PR은 9단계로 밀림).

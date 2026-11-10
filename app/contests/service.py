@@ -71,7 +71,7 @@ def collect(
 def _collect_one(
     source: ContestSource, repo: ContestRepository, today: date, rules: tuple[KeywordRule, ...]
 ) -> CollectResult:
-    """소스 하나를 수집해 분류·저장하고, 실패하면 로그만 남긴다."""
+    """소스 하나를 수집해 분류·저장한다. 실패하면 로그를 남기고 `error` 에 담아 돌려준다 (F2-1)."""
     result = CollectResult(source=source.name)
     cutoff = purge_cutoff(today)
     try:
