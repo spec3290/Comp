@@ -37,7 +37,6 @@ def _record(contest_id: str, apply_start: date | None, apply_end: date) -> Conte
         apply_end=apply_end,
         event_start=None,
         event_end=None,
-        eligibility_text="대상: 대학생",
         apply_url="https://example.com/apply",
         source_url="https://example.com",
         sources=("dacon",),

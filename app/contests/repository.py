@@ -31,10 +31,9 @@ from app.contests.rules import (
     NO_TAGS,
     ContestQuery,
     ContestStatus,
+    ContestTags,
     Dimension,
-    EligibilityTags,
     SortOrder,
-    accepted_values,
 )
 from app.core.db import Document
 from app.core.time import KST
@@ -62,11 +61,10 @@ class ContestRecord:
     apply_end: date
     event_start: date | None
     event_end: date | None
-    eligibility_text: str
     apply_url: str
     source_url: str
     sources: tuple[str, ...]
-    tags: EligibilityTags = NO_TAGS
+    tags: ContestTags = NO_TAGS
 
 
 _SORT_KEYS: dict[SortOrder, list[tuple[str, int]]] = {
@@ -100,12 +98,12 @@ def _status_filter(status: ContestStatus, today: datetime) -> dict[str, Any]:
     return {"$and": [started, {"apply_end": {"$gte": today}}]}
 
 
-def _eligibility_filter(dimension: Dimension, requested: frozenset[str]) -> dict[str, Any]:
-    """요청 값·와일드카드 태그가 있거나, 그 차원이 미분류(태그 없음)면 통과한다 (F3-3)."""
+def _tag_filter(dimension: Dimension, requested: frozenset[str]) -> dict[str, Any]:
+    """요청 값 태그가 있거나, 그 차원이 미분류(태그 없음)면 통과한다 (F3-3)."""
     key = f"tags.{dimension.value}"
     return {
         "$or": [
-            {key: {"$in": sorted(accepted_values(dimension, requested))}},
+            {key: {"$in": sorted(requested)}},
             {f"{key}.0": {"$exists": False}},
         ]
     }
@@ -118,12 +116,10 @@ def build_filter(query: ContestQuery, today: date) -> dict[str, Any]:
     if query.statuses:
         statuses = sorted(query.statuses)
         conditions.append({"$or": [_status_filter(s, midnight) for s in statuses]})
-    if query.fields:
-        conditions.append({"$or": [{"field": _contains(f)} for f in query.fields]})
     if query.keyword:
         conditions.append({"title": _contains(query.keyword)})
-    for dimension in query.eligibility.dimensions():
-        conditions.append(_eligibility_filter(dimension, query.eligibility.get(dimension)))
+    for dimension in query.tags.dimensions():
+        conditions.append(_tag_filter(dimension, query.tags.get(dimension)))
     if not conditions:
         return {}
     return conditions[0] if len(conditions) == 1 else {"$and": conditions}
@@ -139,20 +135,19 @@ def _fields(contest: RawContest) -> dict[str, Any]:
         "apply_end": _to_datetime(contest.apply_end),
         "event_start": _to_datetime(contest.event_start),
         "event_end": _to_datetime(contest.event_end),
-        "eligibility_text": contest.eligibility_text,
         "apply_url": contest.apply_url,
         "source_url": contest.source_url,
     }
 
 
-def _tags_doc(tags: EligibilityTags) -> dict[str, list[str]]:
-    """자격 태그를 차원별 정렬된 목록 문서로 바꾼다."""
+def _tags_doc(tags: ContestTags) -> dict[str, list[str]]:
+    """분류 태그를 차원별 정렬된 목록 문서로 바꾼다."""
     return {d.value: tags.ordered(d) for d in Dimension}
 
 
-def _to_tags(doc: dict[str, list[str]]) -> EligibilityTags:
+def _to_tags(doc: dict[str, list[str]]) -> ContestTags:
     """분류 전에 저장된 문서는 tags 가 없다. 미분류로 본다."""
-    return EligibilityTags(**{d.value: frozenset(doc.get(d.value, [])) for d in Dimension})
+    return ContestTags(**{d.value: frozenset(doc.get(d.value, [])) for d in Dimension})
 
 
 def _to_record(doc: Document) -> ContestRecord:
@@ -169,7 +164,6 @@ def _to_record(doc: Document) -> ContestRecord:
         apply_end=apply_end,
         event_start=_to_date(doc.get("event_start")),
         event_end=_to_date(doc.get("event_end")),
-        eligibility_text=doc.get("eligibility_text", ""),
         apply_url=doc["apply_url"],
         source_url=doc["source_url"],
         sources=tuple(s["source"] for s in doc.get("sources", [])),
@@ -191,11 +185,11 @@ class ContestRepository:
         self._contests.create_index([("source", ASCENDING), ("source_url", ASCENDING)])
 
     def save(
-        self, contest: RawContest, merge_key: str, now: datetime, *, tags: EligibilityTags
+        self, contest: RawContest, merge_key: str, now: datetime, *, tags: ContestTags
     ) -> SaveOutcome:
         """merge_key 기준 upsert. 같은 입력을 여러 번 저장해도 문서는 하나다 (F2-2 멱등).
 
-        자격 태그(F3-1)는 참가 자격 원문과 함께 대표 소스의 값을 따른다.
+        분류 태그(F3-1)는 다른 필드와 함께 대표 소스의 값을 따른다.
         """
         self._rekey(contest, merge_key)
         fields = {**_fields(contest), "tags": _tags_doc(tags)}

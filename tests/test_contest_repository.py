@@ -13,7 +13,7 @@ from app.contests.rules import (
     NO_TAGS,
     ContestQuery,
     ContestStatus,
-    EligibilityTags,
+    ContestTags,
     SortOrder,
     merge_key,
 )
@@ -37,16 +37,13 @@ def _contest(
         apply_end=apply_end,
         event_start=None,
         event_end=None,
-        eligibility_text="",
         apply_url=f"https://{source}.example.com",
         source=source,
         source_url=f"https://{source}.example.com/{title}",
     )
 
 
-def _save(
-    repo: ContestRepository, contest: RawContest, tags: EligibilityTags = NO_TAGS
-) -> SaveOutcome:
+def _save(repo: ContestRepository, contest: RawContest, tags: ContestTags = NO_TAGS) -> SaveOutcome:
     """병합 키를 계산해 대회를 저장한다."""
     key = merge_key(contest.title, contest.host, contest.apply_end)
     return repo.save(contest, key, now_kst(), tags=tags)
@@ -59,16 +56,15 @@ def test_save_is_idempotent_and_merges_sources(mongo_db: Database[Document]) -> 
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
 
-    assert repo.save(_contest("a"), key, now_kst(), tags=EligibilityTags()) is SaveOutcome.INSERTED
+    assert repo.save(_contest("a"), key, now_kst(), tags=NO_TAGS) is SaveOutcome.INSERTED
     assert (
-        repo.save(_contest("a", field="AI, 데이터"), key, now_kst(), tags=EligibilityTags())
+        repo.save(_contest("a", field="AI, 데이터"), key, now_kst(), tags=NO_TAGS)
         is SaveOutcome.UPDATED
     )
     assert (
-        repo.save(_contest("b", field="무시됨"), key, now_kst(), tags=EligibilityTags())
-        is SaveOutcome.MERGED
+        repo.save(_contest("b", field="무시됨"), key, now_kst(), tags=NO_TAGS) is SaveOutcome.MERGED
     )
-    assert repo.save(_contest("b"), key, now_kst(), tags=EligibilityTags()) is SaveOutcome.MERGED
+    assert repo.save(_contest("b"), key, now_kst(), tags=NO_TAGS) is SaveOutcome.MERGED
 
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
@@ -111,10 +107,8 @@ def test_find_filters_by_computed_status_and_sorts_by_deadline(seeded: ContestRe
 
 
 @pytest.mark.feature("F2-3")
-def test_find_field_or_and_keyword(seeded: ContestRepository) -> None:
-    """분야는 OR, 제목 검색은 대소문자 무시 부분 일치다."""
-    query = ContestQuery(statuses=frozenset(ContestStatus), fields=("보안", "디자인"))
-    assert sorted(_titles(seeded, query)) == ["마감 디자인", "예정 보안"]
+def test_find_keyword_ignores_case(seeded: ContestRepository) -> None:
+    """제목 검색은 대소문자 무시 부분 일치다."""
     assert _titles(seeded, ContestQuery(keyword="ai")) == ["접수중 AI"]
 
 
@@ -188,7 +182,7 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(
     def save(contest: RawContest) -> SaveOutcome:
         """배리어에서 함께 출발해 저장한다."""
         barrier.wait()  # 최대한 동시에 출발시킨다
-        return repo.save(contest, key, now_kst(), tags=EligibilityTags())
+        return repo.save(contest, key, now_kst(), tags=NO_TAGS)
 
     with ThreadPoolExecutor(max_workers=len(contests)) as pool:
         outcomes = list(pool.map(save, contests))
@@ -227,42 +221,40 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(
 
 @pytest.mark.feature("F3-1")
 def test_tags_follow_representative_source(mongo_db: Database[Document]) -> None:
-    """자격 태그는 대표 소스의 값을 따른다."""
+    """분류 태그는 대표 소스의 값을 따른다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
-    _save(repo, _contest("a"), EligibilityTags(education=frozenset({"대학생"})))
-    _save(repo, _contest("b"), EligibilityTags(education=frozenset({"고등학생"})))
+    _save(repo, _contest("a"), ContestTags(field=frozenset({"AI"})))
+    _save(repo, _contest("b"), ContestTags(field=frozenset({"개발"})))
 
     (record,), _ = repo.find(ContestQuery(), TODAY)
 
-    assert record.tags == EligibilityTags(education=frozenset({"대학생"}))
+    assert record.tags == ContestTags(field=frozenset({"AI"}))
 
 
 @pytest.mark.feature("F3-3")
-def test_find_by_eligibility_keeps_wildcards_and_unclassified(mongo_db: Database[Document]) -> None:
-    """자격 필터는 제한 없음·미분류 대회를 빼지 않는다."""
+def test_find_by_tags_keeps_unclassified(mongo_db: Database[Document]) -> None:
+    """분야·형식 필터는 값 안은 OR, 차원 사이는 AND 이고 미분류 대회를 빼지 않는다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(
         repo,
-        _contest("a", title="대학생 서울"),
-        EligibilityTags(education=frozenset({"대학생"}), region=frozenset({"서울"})),
+        _contest("a", title="AI 해커톤"),
+        ContestTags(field=frozenset({"AI"}), format=frozenset({"해커톤"})),
     )
-    _save(repo, _contest("a", title="고등학생"), EligibilityTags(education=frozenset({"고등학생"})))
     _save(
         repo,
-        _contest("a", title="누구나 전국"),
-        EligibilityTags(education=frozenset({"제한 없음"}), region=frozenset({"전국"})),
+        _contest("a", title="보안 공모전"),
+        ContestTags(field=frozenset({"보안"}), format=frozenset({"공모전"})),
     )
+    _save(repo, _contest("a", title="형식 미분류"), ContestTags(field=frozenset({"AI"})))
     _save(repo, _contest("a", title="미분류"))
     mongo_db[COLLECTION].update_one({"title": "미분류"}, {"$unset": {"tags": ""}})  # 분류 전 문서
 
-    university = ContestQuery(eligibility=EligibilityTags(education=frozenset({"대학생"})))
-    assert sorted(_titles(repo, university)) == ["누구나 전국", "대학생 서울", "미분류"]
+    ai = ContestQuery(tags=ContestTags(field=frozenset({"AI"})))
+    assert sorted(_titles(repo, ai)) == ["AI 해커톤", "미분류", "형식 미분류"]
 
-    both = ContestQuery(
-        eligibility=EligibilityTags(
-            education=frozenset({"고등학생", "대학생"}), region=frozenset({"부산"})
-        )
+    ai_or_security_hackathon = ContestQuery(
+        tags=ContestTags(field=frozenset({"AI", "보안"}), format=frozenset({"해커톤"}))
     )
-    assert sorted(_titles(repo, both)) == ["고등학생", "누구나 전국", "미분류"]
+    assert sorted(_titles(repo, ai_or_security_hackathon)) == ["AI 해커톤", "미분류", "형식 미분류"]

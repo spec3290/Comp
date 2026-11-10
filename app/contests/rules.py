@@ -1,6 +1,6 @@
 """대회 도메인 규칙 (순수 파이썬). 상태·D-day는 저장하지 않고 날짜로부터 계산한다.
 
-자격 분류 (F3-1) 의 키워드는 코드가 아니라 `qualification_rules.toml` 에 둔다.
+분야·형식 분류 (F3-1) 의 대응표·키워드는 코드가 아니라 `classification_rules.toml` 에 둔다.
 
 프레임워크·DB·HTTP 를 import 하지 않는다 (AC-1).
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
@@ -61,80 +62,52 @@ DEFAULT_STATUSES = frozenset({ContestStatus.OPEN, ContestStatus.UPCOMING})
 
 
 class Dimension(StrEnum):
-    """자격 태그 차원 (F3-1). 값은 API 쿼리 파라미터·저장 키로 그대로 쓴다.
+    """분류 태그 차원 (F3-1). 값은 API 쿼리 파라미터·저장 키로 그대로 쓴다.
 
-    분야는 키워드로 정확히 가르기 어려워 1차에서는 태그로 분류하지 않는다 (Q-19).
+    참가 자격(학력·참가 형태·지역)은 근거 원문을 주는 소스가 없어 분류하지 않는다 (Q-23).
     """
 
-    EDUCATION = "education"
-    TEAM_TYPE = "team_type"
-    REGION = "region"
+    FIELD = "field"
+    FORMAT = "format"
 
 
-class Education(StrEnum):
-    """학력 자격 값."""
+class ContestField(StrEnum):
+    """분야 값. 프로필 관심 분야(`app.auth.rules.InterestField`)와 같은 어휘다 (Q-5)."""
 
-    HIGH_SCHOOL = "고등학생"
-    UNIVERSITY = "대학생"
-    ANY = "제한 없음"
-
-
-class TeamType(StrEnum):
-    """참가 형태 값."""
-
-    SOLO = "개인"
-    TEAM = "팀"
+    DEV = "개발"
+    AI = "AI"
+    SECURITY = "보안"
+    DESIGN = "디자인"
+    IDEA = "아이디어"
 
 
-class Region(StrEnum):
-    """지역 자격 값."""
+class ContestFormat(StrEnum):
+    """대회 형식 값."""
 
-    NATIONWIDE = "전국"
-    SEOUL = "서울"
-    BUSAN = "부산"
-    DAEGU = "대구"
-    INCHEON = "인천"
-    GWANGJU = "광주"
-    DAEJEON = "대전"
-    ULSAN = "울산"
-    SEJONG = "세종"
-    GYEONGGI = "경기"
-    GANGWON = "강원"
-    CHUNGBUK = "충북"
-    CHUNGNAM = "충남"
-    JEONBUK = "전북"
-    JEONNAM = "전남"
-    GYEONGBUK = "경북"
-    GYEONGNAM = "경남"
-    JEJU = "제주"
+    HACKATHON = "해커톤"
+    COMPETITION = "경진대회"
+    CONTEST = "공모전"
+    IDEATHON = "아이디어톤"
 
 
 # 차원별 허용 값. 응답의 태그 순서도 이 정의 순서를 따른다.
 VOCABULARY: dict[Dimension, tuple[str, ...]] = {
-    Dimension.EDUCATION: tuple(Education),
-    Dimension.TEAM_TYPE: tuple(TeamType),
-    Dimension.REGION: tuple(Region),
+    Dimension.FIELD: tuple(ContestField),
+    Dimension.FORMAT: tuple(ContestFormat),
 }
 
-# 이 값이 붙은 대회는 같은 차원의 어떤 필터 값에도 걸린다 (누구나 참가 가능, 지역 무관)
-WILDCARDS: dict[Dimension, str] = {
-    Dimension.EDUCATION: Education.ANY,
-    Dimension.REGION: Region.NATIONWIDE,
-}
-
-RULES_PATH = Path(__file__).with_name("qualification_rules.toml")
+RULES_PATH = Path(__file__).with_name("classification_rules.toml")
 
 
 @dataclass(frozen=True)
-class EligibilityTags:
-    """차원별 태그 값. 대회에 붙은 태그이기도 하고 목록 조회의 자격 필터이기도 하다.
+class ContestTags:
+    """차원별 태그 값. 대회에 붙은 태그이기도 하고 목록 조회의 태그 필터이기도 하다.
 
     한 차원에 값이 없으면 그 차원은 미분류(필터라면 조건 없음)다.
     """
 
-    education: frozenset[str] = frozenset()
-    team_type: frozenset[str] = frozenset()
-    region: frozenset[str] = frozenset()
+    field: frozenset[str] = frozenset()
+    format: frozenset[str] = frozenset()
 
     def get(self, dimension: Dimension) -> frozenset[str]:
         """차원 하나의 태그 집합을 돌려준다."""
@@ -151,69 +124,119 @@ class EligibilityTags:
         return [d for d in Dimension if self.get(d)]
 
 
-# 태그가 하나도 없음: 완전히 미분류인 대회, 또는 자격 필터 없음
-NO_TAGS = EligibilityTags()
+# 태그가 하나도 없음: 완전히 미분류인 대회, 또는 태그 필터 없음
+NO_TAGS = ContestTags()
 
 
 @dataclass(frozen=True)
-class KeywordRule:
-    """키워드가 보이면 특정 차원에 값을 붙이는 분류 규칙."""
+class SourceDefaults:
+    """소스 자체가 정해 주는 값. 분야는 항상 더하고, 형식은 제목에 형식 단어가 없을 때만 쓴다."""
 
-    dimension: Dimension
-    value: str
-    keywords: tuple[str, ...]
+    fields: frozenset[str] = frozenset()
+    format: str | None = None
+
+
+@dataclass(frozen=True)
+class ClassificationRules:
+    """분류 규칙 (F3-1, Q-23).
+
+    분야는 소스가 붙인 태그를 대응표로 옮기고(추측 없음), 형식은 제목의 형식 단어로 정한다.
+    """
+
+    field_by_tag: Mapping[str, frozenset[str]]  # 정규화한 소스 태그 → 분야 값
+    format_keywords: tuple[tuple[str, tuple[str, ...]], ...]  # (형식 값, 정규화한 키워드)
+    sources: Mapping[str, SourceDefaults]
 
 
 def _compact(text: str) -> str:
-    """키워드 비교용: 공백을 지우고 소문자로 ('제한 없음' == '제한없음')."""
+    """비교용: 공백을 지우고 소문자로 ('Machine Learning/AI' == 'machinelearning/ai')."""
     return "".join(text.split()).lower()
 
 
-def parse_rules(data: dict[str, Any]) -> tuple[KeywordRule, ...]:
-    """설정 파일 내용을 규칙으로 바꾼다. 어휘 밖의 차원·값이나 빈 키워드는 ValueError."""
-    rules: list[KeywordRule] = []
-    for raw in data.get("rules", []):
-        dimension = Dimension(raw["dimension"])
-        value = raw["value"]
-        if value not in VOCABULARY[dimension]:
-            raise ValueError(f"{dimension}: 어휘에 없는 값 {value!r}")
-        keywords = tuple(_compact(k) for k in raw["keywords"])
-        if not keywords or not all(keywords):
-            raise ValueError(f"{dimension}={value}: 빈 키워드")
-        rules.append(KeywordRule(dimension=dimension, value=value, keywords=keywords))
-    return tuple(rules)
+def _checked(dimension: Dimension, value: str) -> str:
+    """어휘 밖 값이면 ValueError."""
+    if value not in VOCABULARY[dimension]:
+        raise ValueError(f"{dimension}: 어휘에 없는 값 {value!r}")
+    return value
 
 
-def load_rules(path: Path = RULES_PATH) -> tuple[KeywordRule, ...]:
+def _compact_all(where: str, values: list[str]) -> tuple[str, ...]:
+    """정규화한 목록. 비었거나 빈 항목이 있으면 ValueError."""
+    compacted = tuple(_compact(v) for v in values)
+    if not compacted or not all(compacted):
+        raise ValueError(f"{where}: 빈 태그·키워드")
+    return compacted
+
+
+def _parse_field_rules(raws: list[dict[str, Any]]) -> dict[str, frozenset[str]]:
+    """분야 대응표를 '소스 태그 → 분야 값들' 로 뒤집는다."""
+    by_tag: dict[str, set[str]] = {}
+    for raw in raws:
+        value = _checked(Dimension.FIELD, raw["value"])
+        for tag in _compact_all(f"field={value}", raw["source_tags"]):
+            by_tag.setdefault(tag, set()).add(value)
+    return {tag: frozenset(values) for tag, values in by_tag.items()}
+
+
+def _parse_source(raw: dict[str, Any]) -> SourceDefaults:
+    """소스 기본값 한 개를 읽는다."""
+    fmt = raw.get("format")
+    return SourceDefaults(
+        fields=frozenset(_checked(Dimension.FIELD, v) for v in raw.get("fields", [])),
+        format=None if fmt is None else _checked(Dimension.FORMAT, fmt),
+    )
+
+
+def parse_rules(data: dict[str, Any]) -> ClassificationRules:
+    """설정 파일 내용을 규칙으로 바꾼다. 어휘 밖 값이나 빈 태그·키워드는 ValueError."""
+    format_keywords = tuple(
+        (
+            _checked(Dimension.FORMAT, raw["value"]),
+            _compact_all(f"format={raw['value']}", raw["keywords"]),
+        )
+        for raw in data.get("format", [])
+    )
+    return ClassificationRules(
+        field_by_tag=_parse_field_rules(data.get("field", [])),
+        format_keywords=format_keywords,
+        sources={name: _parse_source(raw) for name, raw in data.get("sources", {}).items()},
+    )
+
+
+def load_rules(path: Path = RULES_PATH) -> ClassificationRules:
     """TOML 파일에서 분류 규칙을 읽는다."""
     with path.open("rb") as f:
         return parse_rules(tomllib.load(f))
 
 
-def classify(text: str, rules: tuple[KeywordRule, ...]) -> EligibilityTags:
-    """키워드가 하나라도 들어 있으면 그 규칙의 태그를 붙인다 (F3-1). 없으면 그 차원은 미분류."""
-    compact = _compact(text)
-    found: dict[Dimension, set[str]] = {d: set() for d in Dimension}
-    for rule in rules:
-        if any(keyword in compact for keyword in rule.keywords):
-            found[rule.dimension].add(rule.value)
-    return EligibilityTags(
-        education=frozenset(found[Dimension.EDUCATION]),
-        team_type=frozenset(found[Dimension.TEAM_TYPE]),
-        region=frozenset(found[Dimension.REGION]),
-    )
+def split_source_tags(field: str) -> list[str]:
+    """크롤러가 쉼표로 이어 붙인 소스 태그(`RawContest.field`)를 나눈다."""
+    return [tag.strip() for tag in field.split(",") if tag.strip()]
 
 
-def accepted_values(dimension: Dimension, requested: frozenset[str]) -> frozenset[str]:
-    """필터 값으로 걸리는 태그 값: 요청 값 + 그 차원의 와일드카드."""
-    wildcard = WILDCARDS.get(dimension)
-    return requested if wildcard is None else requested | {wildcard}
+def classify(
+    title: str, source_tags: list[str], source: str, rules: ClassificationRules
+) -> ContestTags:
+    """대회 하나에 분야·형식 태그를 붙인다 (F3-1). 근거가 없는 차원은 미분류로 둔다."""
+    defaults = rules.sources.get(source, SourceDefaults())
+    fields = set(defaults.fields)
+    for tag in source_tags:
+        fields |= rules.field_by_tag.get(_compact(tag), frozenset())
+    compact_title = _compact(title)
+    formats = {
+        value
+        for value, keywords in rules.format_keywords
+        if any(keyword in compact_title for keyword in keywords)
+    }
+    if not formats and defaults.format is not None:
+        formats.add(defaults.format)
+    return ContestTags(field=frozenset(fields), format=frozenset(formats))
 
 
-def needs_eligibility_check(tags: EligibilityTags, requested: EligibilityTags) -> bool:
-    """'자격 확인 필요' (F3-3).
+def needs_tag_check(tags: ContestTags, requested: ContestTags) -> bool:
+    """'분류 확인 필요' (F3-3).
 
-    자격 필터가 있으면 필터한 차원 중 하나라도 미분류여서 조건 확인 없이 걸린 경우,
+    태그 필터가 있으면 필터한 차원 중 하나라도 미분류여서 조건 확인 없이 걸린 경우,
     필터가 없으면 어느 차원에도 태그가 없는(완전히 미분류인) 경우다.
     """
     dimensions = requested.dimensions()
@@ -227,9 +250,8 @@ class ContestQuery:
     """목록 조회 조건 (F2-3, F3-3). 같은 항목 안의 값은 OR, 항목 사이는 AND (Q-9)."""
 
     statuses: frozenset[ContestStatus] = DEFAULT_STATUSES
-    fields: tuple[str, ...] = ()
     keyword: str | None = None
-    eligibility: EligibilityTags = NO_TAGS
+    tags: ContestTags = NO_TAGS
     sort: SortOrder = SortOrder.DEADLINE
     page: int = 1
     size: int = 20

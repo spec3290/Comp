@@ -7,11 +7,11 @@ import pytest
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import ContestRepository, SaveOutcome
-from app.contests.rules import Dimension, EligibilityTags, KeywordRule, merge_key
+from app.contests.rules import ContestTags, load_rules, merge_key
 from app.contests.service import collect, purge_closed
 
 TODAY = date(2026, 10, 23)
-RULES = (KeywordRule(Dimension.EDUCATION, "대학생", ("대학생",)),)
+RULES = load_rules()
 
 
 def _contest(source: str, title: str = "2026 AI 해커톤") -> RawContest:
@@ -24,7 +24,6 @@ def _contest(source: str, title: str = "2026 AI 해커톤") -> RawContest:
         apply_end=date(2026, 11, 1),
         event_start=None,
         event_end=None,
-        eligibility_text="",
         apply_url="https://example.com",
         source=source,
         source_url="https://example.com",
@@ -37,7 +36,7 @@ class FakeRepository(ContestRepository):
     def __init__(self) -> None:
         """저장한 대회·태그·삭제 기준일을 기록할 곳을 만든다."""
         self.saved: dict[str, RawContest] = {}
-        self.tags: dict[str, EligibilityTags] = {}
+        self.tags: dict[str, ContestTags] = {}
         self.purge_cutoffs: list[date] = []
 
     def delete_closed_before(self, cutoff: date) -> int:
@@ -46,7 +45,7 @@ class FakeRepository(ContestRepository):
         return 0
 
     def save(
-        self, contest: RawContest, merge_key: str, now: datetime, *, tags: EligibilityTags
+        self, contest: RawContest, merge_key: str, now: datetime, *, tags: ContestTags
     ) -> SaveOutcome:
         """병합 키가 이미 있으면 병합, 없으면 새로 저장한 것으로 기록한다."""
         if merge_key in self.saved:
@@ -141,13 +140,24 @@ def test_contests_already_past_purge_cutoff_are_not_saved() -> None:
 
 @pytest.mark.feature("F3-1")
 def test_collected_contest_is_classified_before_save() -> None:
-    """저장 전에 참가 자격 원문으로 자격 태그를 붙인다."""
+    """저장 전에 소스 태그·제목·소스 기본값으로 분야·형식 태그를 붙인다."""
     repo = FakeRepository()
-    tagged = replace(_contest("a", "대회 A"), eligibility_text="참가 대상: 대학생")
-    untagged = _contest("a", "대회 B")
+    tagged = replace(_contest("dev_event", "대회 A 해커톤"), field="AI, 블록체인")
+    untagged = replace(_contest("dev_event", "대회 B"), field="기술일반")
+    by_default = replace(_contest("devpost", "Kiroween"), field="Open Ended")
 
-    collect([FakeSource("a", [tagged, untagged])], repo, TODAY, RULES)
+    collect(
+        [FakeSource("dev_event", [tagged, untagged]), FakeSource("devpost", [by_default])],
+        repo,
+        TODAY,
+        RULES,
+    )
 
     by_title = {repo.saved[key].title: tags for key, tags in repo.tags.items()}
-    assert by_title["대회 A"] == EligibilityTags(education=frozenset({"대학생"}))
-    assert by_title["대회 B"] == EligibilityTags()
+    assert by_title["대회 A 해커톤"] == ContestTags(
+        field=frozenset({"AI", "개발"}), format=frozenset({"해커톤"})
+    )
+    assert by_title["대회 B"] == ContestTags()
+    assert by_title["Kiroween"] == ContestTags(
+        field=frozenset({"개발"}), format=frozenset({"해커톤"})
+    )

@@ -1,4 +1,4 @@
-"""대회 API: 목록 (F2-3, 자격 필터 F3-3), 상세 (F2-4), 저장 (F2-7).
+"""대회 API: 목록 (F2-3, 분야·형식 필터 F3-3), 상세 (F2-4), 저장 (F2-7).
 
 목록·상세는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
 """
@@ -14,13 +14,12 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from app.auth.dependencies import CurrentUserId
 from app.contests.rules import (
     DEFAULT_STATUSES,
+    ContestField,
+    ContestFormat,
     ContestQuery,
     ContestStatus,
-    Education,
-    EligibilityTags,
-    Region,
+    ContestTags,
     SortOrder,
-    TeamType,
 )
 from app.contests.schemas import BookmarkPageOut, ContestDetailOut, ContestPageOut
 from app.contests.service import (
@@ -81,21 +80,19 @@ def list_contests(
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     sort: SortOrder = SortOrder.DEADLINE,
     status: Annotated[str | None, Query(description="open,upcoming,closed 중 쉼표 구분")] = None,
-    field: Annotated[str | None, Query(description="분야 부분 일치, 쉼표 구분 시 OR")] = None,
+    field: Annotated[str | None, Query(description="개발,AI,보안,디자인,아이디어")] = None,
+    contest_format: Annotated[
+        str | None, Query(alias="format", description="해커톤,경진대회,공모전,아이디어톤")
+    ] = None,
     q: Annotated[str | None, Query(max_length=100, description="제목 검색")] = None,
-    education: Annotated[str | None, Query(description="고등학생,대학생,제한 없음")] = None,
-    team_type: Annotated[str | None, Query(description="개인,팀")] = None,
-    region: Annotated[str | None, Query(description="전국 또는 시·도 (서울, 경기 등)")] = None,
 ) -> ContestPageOut:
     """필터·정렬·페이지 조건으로 대회 목록을 돌려준다."""
     query = ContestQuery(
         statuses=_parse_statuses(status),
-        fields=_split(field),
         keyword=q.strip() if q and q.strip() else None,
-        eligibility=EligibilityTags(
-            education=_parse_choices("education", education, Education),
-            team_type=_parse_choices("team_type", team_type, TeamType),
-            region=_parse_choices("region", region, Region),
+        tags=ContestTags(
+            field=_parse_choices("field", field, ContestField),
+            format=_parse_choices("format", contest_format, ContestFormat),
         ),
         sort=sort,
         page=page,

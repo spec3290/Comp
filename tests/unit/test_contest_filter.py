@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 import pytest
 
 from app.contests.repository import build_filter
-from app.contests.rules import ContestQuery, ContestStatus, EligibilityTags
+from app.contests.rules import ContestQuery, ContestStatus, ContestTags
 from app.core.time import KST
 
 TODAY = date(2026, 10, 23)
@@ -32,45 +32,37 @@ def test_default_query_excludes_closed() -> None:
 def test_values_or_within_and_across_params() -> None:
     """한 파라미터 안은 OR, 파라미터끼리는 AND 다."""
     query = ContestQuery(
-        statuses=frozenset({ContestStatus.CLOSED}), fields=("AI", "보안"), keyword="해커톤"
+        statuses=frozenset({ContestStatus.CLOSED, ContestStatus.UPCOMING}), keyword="해커톤"
     )
 
     assert build_filter(query, TODAY) == {
         "$and": [
-            {"$or": [CLOSED]},
-            {
-                "$or": [
-                    {"field": {"$regex": "AI", "$options": "i"}},
-                    {"field": {"$regex": "보안", "$options": "i"}},
-                ]
-            },
+            {"$or": [CLOSED, UPCOMING]},
             {"title": {"$regex": "해커톤", "$options": "i"}},
         ]
     }
 
 
 @pytest.mark.feature("F3-3")
-def test_eligibility_filter_keeps_wildcard_and_unclassified() -> None:
-    """자격 필터는 제한 없음·미분류 대회를 함께 고른다."""
+def test_tag_filter_keeps_unclassified() -> None:
+    """분야·형식 필터는 요청 값 태그가 있거나 그 차원이 미분류인 대회를 고른다."""
     query = ContestQuery(
         statuses=frozenset(),
-        eligibility=EligibilityTags(
-            education=frozenset({"대학생", "고등학생"}), team_type=frozenset({"팀"})
-        ),
+        tags=ContestTags(field=frozenset({"AI", "보안"}), format=frozenset({"해커톤"})),
     )
 
     assert build_filter(query, TODAY) == {
         "$and": [
             {
                 "$or": [
-                    {"tags.education": {"$in": ["고등학생", "대학생", "제한 없음"]}},
-                    {"tags.education.0": {"$exists": False}},
+                    {"tags.field": {"$in": ["AI", "보안"]}},
+                    {"tags.field.0": {"$exists": False}},
                 ]
             },
             {
                 "$or": [
-                    {"tags.team_type": {"$in": ["팀"]}},
-                    {"tags.team_type.0": {"$exists": False}},
+                    {"tags.format": {"$in": ["해커톤"]}},
+                    {"tags.format.0": {"$exists": False}},
                 ]
             },
         ]
