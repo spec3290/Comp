@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CollectResult:
+    """소스 하나의 수집 결과 집계."""
+
     source: str
     fetched: int = 0
     skipped: int = 0  # 이미 삭제 기준을 넘긴 마감 대회 (Q-3)
@@ -62,12 +64,14 @@ def collect(
     today: date,
     rules: tuple[KeywordRule, ...],
 ) -> list[CollectResult]:
+    """소스마다 독립적으로 수집한다."""
     return [_collect_one(source, repo, today, rules) for source in sources]
 
 
 def _collect_one(
     source: ContestSource, repo: ContestRepository, today: date, rules: tuple[KeywordRule, ...]
 ) -> CollectResult:
+    """소스 하나를 수집해 분류·저장하고, 실패하면 로그만 남긴다."""
     result = CollectResult(source=source.name)
     cutoff = purge_cutoff(today)
     try:
@@ -96,6 +100,7 @@ def _collect_one(
 
 
 def purge_closed(repo: ContestRepository, today: date) -> int:
+    """삭제 기준일보다 먼저 마감된 대회를 지운다 (Q-3)."""
     deleted = repo.delete_closed_before(purge_cutoff(today))
     logger.info("마감 대회 삭제: %d건 (마감일 < %s)", deleted, purge_cutoff(today))
     return deleted
@@ -103,6 +108,8 @@ def purge_closed(repo: ContestRepository, today: date) -> int:
 
 @dataclass(frozen=True)
 class ContestView:
+    """대회와 요청 시점에 계산한 상태·D-day."""
+
     record: ContestRecord
     status: ContestStatus
     d_day: int
@@ -111,6 +118,8 @@ class ContestView:
 
 @dataclass(frozen=True)
 class ContestPage:
+    """대회 목록 한 페이지."""
+
     items: list[ContestView]
     page: int
     size: int
@@ -118,6 +127,7 @@ class ContestPage:
 
 
 def _view(record: ContestRecord, today: date, requested: EligibilityTags = NO_TAGS) -> ContestView:
+    """대회에 상태·D-day·자격 확인 필요 여부를 계산해 붙인다."""
     period = ApplyPeriod(start=record.apply_start, end=record.apply_end)
     return ContestView(
         record=record,
@@ -128,15 +138,20 @@ def _view(record: ContestRecord, today: date, requested: EligibilityTags = NO_TA
 
 
 class ContestQueryService:
+    """대회 목록·상세 조회 유스케이스."""
+
     def __init__(self, repo: ContestRepository) -> None:
+        """대회 저장소를 받는다."""
         self._repo = repo
 
     def list_contests(self, query: ContestQuery, today: date) -> ContestPage:
+        """조건에 맞는 대회 목록 한 페이지를 돌려준다."""
         records, total = self._repo.find(query, today)
         items = [_view(record, today, query.eligibility) for record in records]
         return ContestPage(items=items, page=query.page, size=query.size, total=total)
 
     def get_contest(self, contest_id: str, today: date) -> ContestView:
+        """대회 상세를 돌려주고 없으면 404."""
         record = self._repo.get(contest_id)
         if record is None:
             raise NotFoundError("대회를 찾을 수 없습니다.")
@@ -144,17 +159,22 @@ class ContestQueryService:
 
 
 def get_query_service() -> ContestQueryService:
+    """요청마다 조회 서비스를 조립한다."""
     return ContestQueryService(ContestRepository(get_database()))
 
 
 @dataclass(frozen=True)
 class BookmarkView:
+    """저장한 대회와 저장 시각."""
+
     contest: ContestView
     bookmarked_at: datetime
 
 
 @dataclass(frozen=True)
 class BookmarkPage:
+    """저장한 대회 목록 한 페이지."""
+
     items: list[BookmarkView]
     page: int
     size: int
@@ -162,11 +182,15 @@ class BookmarkPage:
 
 
 class BookmarkService:
+    """대회 저장·삭제·목록 유스케이스."""
+
     def __init__(self, bookmarks: BookmarkRepository, contests: ContestRepository) -> None:
+        """북마크·대회 저장소를 받는다."""
         self._bookmarks = bookmarks
         self._contests = contests
 
     def add(self, user_id: int, contest_id: str, today: date, now: datetime) -> None:
+        """대회를 저장한다. 없으면 404, 마감됐으면 409."""
         record = self._contests.get(contest_id)
         if record is None:
             raise NotFoundError("대회를 찾을 수 없습니다.")
@@ -194,4 +218,5 @@ class BookmarkService:
 
 
 def get_bookmark_service(session: Annotated[Session, Depends(get_session)]) -> BookmarkService:
+    """요청마다 저장 서비스를 조립한다."""
     return BookmarkService(BookmarkRepository(session), ContestRepository(get_database()))

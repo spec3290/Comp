@@ -43,6 +43,7 @@ Bookmarks = Annotated[BookmarkService, Depends(get_bookmark_service)]
 
 
 def today_kst() -> date:
+    """요청 시점의 KST 날짜. 테스트에서 고정할 수 있게 의존성으로 둔다."""
     return now_kst().date()
 
 
@@ -65,6 +66,7 @@ def _parse_choices(name: str, value: str | None, allowed: type[StrEnum]) -> froz
 
 
 def _parse_statuses(value: str | None) -> frozenset[ContestStatus]:
+    """쉼표로 구분한 상태 값을 읽고 비어 있으면 기본 상태를 쓴다."""
     names = _parse_choices("status", value, ContestStatus)
     if not names:
         return DEFAULT_STATUSES
@@ -85,6 +87,7 @@ def list_contests(
     team_type: Annotated[str | None, Query(description="개인,팀")] = None,
     region: Annotated[str | None, Query(description="전국 또는 시·도 (서울, 경기 등)")] = None,
 ) -> ContestPageOut:
+    """필터·정렬·페이지 조건으로 대회 목록을 돌려준다."""
     query = ContestQuery(
         statuses=_parse_statuses(status),
         fields=_split(field),
@@ -103,6 +106,7 @@ def list_contests(
 
 @router.get("/{contest_id}", response_model=ContestDetailOut)
 def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetailOut:
+    """대회 상세를 돌려준다."""
     return ContestDetailOut.from_view(service.get_contest(contest_id, today))
 
 
@@ -110,12 +114,14 @@ def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetai
 def bookmark_contest(
     contest_id: str, user_id: CurrentUserId, service: Bookmarks, today: Today
 ) -> Response:
+    """대회를 저장한다."""
     service.add(user_id, contest_id, today, now_kst())
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/{contest_id}/bookmark", status_code=status.HTTP_204_NO_CONTENT)
 def unbookmark_contest(contest_id: str, user_id: CurrentUserId, service: Bookmarks) -> Response:
+    """저장한 대회를 지운다."""
     service.remove(user_id, contest_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -128,4 +134,5 @@ def list_my_bookmarks(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> BookmarkPageOut:
+    """내가 저장한 대회 목록을 돌려준다."""
     return BookmarkPageOut.from_page(service.list_bookmarks(user_id, today, page, size))

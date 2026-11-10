@@ -14,6 +14,7 @@ from app.auth.service import CurrentToken
 
 
 def get_current_user_id(token: CurrentToken) -> int:
+    """검증된 Access Token 에서 회원 ID 만 꺼낸다."""
     return token.user_id
 
 

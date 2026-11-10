@@ -36,6 +36,8 @@ class RawContest:
 
 
 class ContestSource(Protocol):
+    """대회 수집 소스 경계. 사이트마다 구현체를 둔다."""
+
     name: str
 
     def fetch(self) -> list[RawContest]:
@@ -44,6 +46,7 @@ class ContestSource(Protocol):
 
 
 def new_client() -> httpx.Client:
+    """수집용 공유 HTTP 클라이언트를 만든다."""
     return httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True)
 
 

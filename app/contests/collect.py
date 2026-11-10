@@ -21,6 +21,7 @@ from app.core.time import now_kst
 
 
 def run() -> list[CollectResult]:
+    """모든 소스에서 수집하고 오래된 마감 대회를 지운다."""
     repo = ContestRepository(get_database())
     repo.ensure_indexes()
     today = now_kst().date()
@@ -37,6 +38,7 @@ def run() -> list[CollectResult]:
 
 
 def main() -> int:
+    """수집을 실행하고 실패한 소스가 있으면 1 을 돌려준다 (CLI 진입점)."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
         results = run()

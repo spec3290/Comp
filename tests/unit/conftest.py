@@ -35,6 +35,7 @@ from tests.unit.auth_support import (
 
 @pytest.fixture
 def session() -> Iterator[Session]:
+    """메모리 SQLite 로 만든 세션."""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -46,11 +47,13 @@ def session() -> Iterator[Session]:
 
 @pytest.fixture
 def redis() -> fakeredis.FakeRedis:
+    """가짜 Redis."""
     return fakeredis.FakeRedis(decode_responses=True)
 
 
 @pytest.fixture
 def issuer(redis: fakeredis.FakeRedis) -> TokenIssuer:
+    """테스트 키·TTL 로 만든 토큰 발급기."""
     return TokenIssuer(TokenStore(redis), SECRET, ACCESS_TTL, REFRESH_TTL)
 
 
@@ -58,6 +61,7 @@ def issuer(redis: fakeredis.FakeRedis) -> TokenIssuer:
 def client(
     session: Session, redis: fakeredis.FakeRedis, issuer: TokenIssuer
 ) -> Iterator[TestClient]:
+    """가짜 제공자와 테스트 의존성을 끼운 API 클라이언트."""
     service = AuthService(
         providers={"google": FakeProvider(CODES)},
         users=UserRepository(session),
@@ -80,6 +84,7 @@ def protected(issuer: TokenIssuer) -> Iterator[TestClient]:
 
     @api.get("/protected")
     def protected_route(token: CurrentToken) -> dict[str, int]:
+        """인증이 필요한 테스트용 엔드포인트."""
         return {"user_id": token.user_id}
 
     api.dependency_overrides[get_token_issuer] = lambda: issuer

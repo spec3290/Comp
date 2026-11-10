@@ -1,3 +1,5 @@
+"""FastAPI 앱 조립: 미들웨어, 에러 핸들러, 라우터 등록."""
+
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -20,6 +22,7 @@ from app.health import router as health_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+    """기동 시 설정을 검증하고 종료 시 외부 연결을 정리한다."""
     get_token_issuer()  # JWT_SECRET 이 짧거나 없으면 첫 요청이 아니라 기동 때 실패한다
     yield
     get_token_issuer.cache_clear()  # Redis 클라이언트를 닫기 전에 놓는다
@@ -39,6 +42,7 @@ def _frontend_origin() -> str:
 
 
 def create_app() -> FastAPI:
+    """CORS·로그 가림·에러 핸들러·라우터를 붙인 앱을 만든다."""
     application = FastAPI(title="Contest Collector", lifespan=lifespan)
     # 토큰은 쿠키가 아니라 Authorization 헤더로 오가므로 credentials 는 허용하지 않는다
     application.add_middleware(

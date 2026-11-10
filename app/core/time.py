@@ -7,4 +7,5 @@ KST = ZoneInfo("Asia/Seoul")
 
 
 def now_kst() -> datetime:
+    """현재 KST 시각을 돌려준다."""
     return datetime.now(KST)

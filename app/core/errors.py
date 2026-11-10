@@ -15,41 +15,53 @@ _HTTP_CODES = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}
 
 
 class AppError(Exception):
+    """도메인 예외의 기반. 상태 코드와 error.code 를 함께 가진다."""
+
     status_code = 500
     code = "INTERNAL_ERROR"
 
     def __init__(self, message: str) -> None:
+        """응답에 그대로 내보낼 메시지를 저장한다."""
         super().__init__(message)
         self.message = message
 
 
 class BadRequestError(AppError):
+    """입력이 잘못됐을 때 (400)."""
+
     status_code = 400
     code = "VALIDATION_ERROR"
 
 
 class NotFoundError(AppError):
+    """대상을 찾지 못했을 때 (404)."""
+
     status_code = 404
     code = "NOT_FOUND"
 
 
 class ContestClosedError(AppError):
+    """마감된 대회에 대한 요청일 때 (409)."""
+
     status_code = 409
     code = "CONTEST_CLOSED"
 
 
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:
+    """ADR-0004 단일 에러 포맷으로 JSON 응답을 만든다."""
     return JSONResponse(
         status_code=status_code, content={"error": {"code": code, "message": message}}
     )
 
 
 async def _app_error(_: Request, exc: Exception) -> JSONResponse:
+    """AppError 를 선언된 상태 코드·코드로 변환한다."""
     assert isinstance(exc, AppError)
     return error_response(exc.status_code, exc.code, exc.message)
 
 
 async def _validation_error(_: Request, exc: Exception) -> JSONResponse:
+    """요청 검증 실패를 첫 오류 위치와 함께 400 으로 변환한다."""
     assert isinstance(exc, RequestValidationError)
     first = exc.errors()[0] if exc.errors() else {}
     location = ".".join(str(part) for part in first.get("loc", ()) if part != "query")
@@ -58,17 +70,20 @@ async def _validation_error(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _http_error(_: Request, exc: Exception) -> JSONResponse:
+    """Starlette HTTP 예외를 단일 포맷으로 변환한다."""
     assert isinstance(exc, StarletteHTTPException)
     code = _HTTP_CODES.get(exc.status_code, f"HTTP_{exc.status_code}")
     return error_response(exc.status_code, code, str(exc.detail))
 
 
 async def _unhandled_error(_: Request, exc: Exception) -> JSONResponse:
+    """예상 못 한 예외는 로그에만 남기고 500 으로 응답한다."""
     logger.exception("처리되지 않은 오류", exc_info=exc)  # 상세는 로그에만 (ADR-0004)
     return error_response(500, AppError.code, "서버 오류가 발생했습니다.")
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    """앱에 에러 핸들러들을 등록한다."""
     app.add_exception_handler(AppError, _app_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_exception_handler(StarletteHTTPException, _http_error)

@@ -1,3 +1,5 @@
+"""인증·회원 API 의 요청·응답 스키마."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -20,6 +22,8 @@ from app.auth.tokens import IssuedTokens
 
 
 class TokenOut(BaseModel):
+    """토큰 발급 응답."""
+
     access_token: str
     refresh_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105  토큰 종류 이름
@@ -27,6 +31,7 @@ class TokenOut(BaseModel):
 
     @classmethod
     def from_tokens(cls, tokens: IssuedTokens) -> TokenOut:
+        """발급한 토큰으로 응답을 만든다."""
         return cls(
             access_token=tokens.access_token,
             refresh_token=tokens.refresh_token,
@@ -35,19 +40,26 @@ class TokenOut(BaseModel):
 
 
 class LoginOut(TokenOut):
+    """로그인 응답. 토큰과 온보딩 필요 여부를 담는다."""
+
     needs_onboarding: bool  # 프로필(F1-7) 미설정 신규 회원이면 True
 
     @classmethod
     def from_result(cls, result: LoginResult) -> LoginOut:
+        """로그인 결과로 응답을 만든다."""
         tokens = TokenOut.from_tokens(result.tokens)
         return cls(**tokens.model_dump(), needs_onboarding=result.needs_onboarding)
 
 
 class LoginCodeIn(BaseModel):
+    """일회용 로그인 코드 교환 요청."""
+
     login_code: str = Field(min_length=1, max_length=128, description="콜백이 프론트로 넘긴 값")
 
 
 class RefreshIn(BaseModel):
+    """토큰 재발급 요청."""
+
     refresh_token: str = Field(min_length=1, max_length=2048)
 
 
@@ -64,9 +76,11 @@ class ProfileIn(BaseModel):
     @field_validator("nickname")
     @classmethod
     def _nickname(cls, value: str) -> str:
+        """닉네임을 정규화한다."""
         return normalize_nickname(value)
 
     def to_input(self) -> ProfileInput:
+        """도메인 입력값으로 바꾼다."""
         return ProfileInput(
             nickname=self.nickname,
             grade=self.grade,
@@ -76,6 +90,8 @@ class ProfileIn(BaseModel):
 
 
 class UserOut(BaseModel):
+    """회원 정보 응답."""
+
     id: int
     provider: str
     nickname: str | None
@@ -87,6 +103,7 @@ class UserOut(BaseModel):
 
     @classmethod
     def from_user(cls, user: User) -> UserOut:
+        """회원 모델로 응답을 만든다."""
         return cls(
             id=user.id,
             provider=user.provider,

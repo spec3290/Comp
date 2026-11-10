@@ -12,6 +12,7 @@ CALLBACK = (
 
 
 def _access_record(path: str) -> logging.LogRecord:
+    """uvicorn 접근 로그 형식의 로그 레코드."""
     # uvicorn: '%s - "%s %s HTTP/%s" %d' % (client, method, path, http_version, status)
     return logging.LogRecord(
         "uvicorn.access",
@@ -26,6 +27,7 @@ def _access_record(path: str) -> logging.LogRecord:
 
 @pytest.mark.feature("F1-6")
 def test_access_log_hides_oauth_code_and_state() -> None:
+    """접근 로그에서 OAuth code 와 state 를 가린다."""
     record = _access_record(CALLBACK)
 
     RedactQueryFilter().filter(record)
@@ -50,11 +52,13 @@ def test_access_log_hides_oauth_code_and_state() -> None:
     ],
 )
 def test_redact_masks_only_sensitive_query_values(text: str, expected: str) -> None:
+    """민감한 쿼리 값만 가리고 나머지는 둔다."""
     assert redact(text) == expected
 
 
 @pytest.mark.feature("F1-6")
 def test_install_adds_filter_once() -> None:
+    """여러 번 설치해도 필터는 하나만 붙는다."""
     install_log_redaction()
     install_log_redaction()
 

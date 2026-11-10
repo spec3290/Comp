@@ -11,6 +11,8 @@ from app.core.sql import AwareDateTime, Base
 
 
 class User(Base):
+    """소셜 로그인으로 가입한 회원과 프로필 (F1-6, F1-7)."""
+
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("provider", "provider_id", name="uq_users_provider"),
@@ -32,10 +34,13 @@ class User(Base):
 
     @property
     def needs_onboarding(self) -> bool:
+        """닉네임이 없으면 아직 프로필을 설정하지 않은 신규 회원이다."""
         return self.nickname is None
 
 
 class UserInterestField(Base):
+    """회원이 고른 관심 분야 하나."""
+
     __tablename__ = "user_interest_fields"
 
     user_id: Mapped[int] = mapped_column(

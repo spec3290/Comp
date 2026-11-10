@@ -28,6 +28,7 @@ def _contest(
     apply_start: date | None = date(2026, 10, 1),
     apply_end: date = date(2026, 11, 1),
 ) -> RawContest:
+    """필드 값을 바꿔 가며 쓰는 테스트용 대회를 만든다."""
     return RawContest(
         title=title,
         host="주최사",
@@ -46,12 +47,14 @@ def _contest(
 def _save(
     repo: ContestRepository, contest: RawContest, tags: EligibilityTags = NO_TAGS
 ) -> SaveOutcome:
+    """병합 키를 계산해 대회를 저장한다."""
     key = merge_key(contest.title, contest.host, contest.apply_end)
     return repo.save(contest, key, now_kst(), tags=tags)
 
 
 @pytest.mark.feature("F2-2")
 def test_save_is_idempotent_and_merges_sources(mongo_db: Database[Document]) -> None:
+    """같은 대회를 다시 저장하면 갱신되고 다른 소스는 출처로 병합된다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
@@ -82,6 +85,7 @@ TODAY = date(2026, 10, 23)
 
 @pytest.fixture
 def seeded(mongo_db: Database[Document]) -> ContestRepository:
+    """상태가 다양한 대회 다섯 건을 넣어 둔 저장소."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("a", title="접수중 AI", apply_end=date(2026, 10, 30)))
@@ -93,12 +97,14 @@ def seeded(mongo_db: Database[Document]) -> ContestRepository:
 
 
 def _titles(repo: ContestRepository, query: ContestQuery) -> list[str]:
+    """조회 결과의 제목 목록."""
     records, _ = repo.find(query, TODAY)
     return [r.title for r in records]
 
 
 @pytest.mark.feature("F2-3")
 def test_find_filters_by_computed_status_and_sorts_by_deadline(seeded: ContestRepository) -> None:
+    """날짜로 계산한 상태로 거르고 마감 임박순으로 정렬한다."""
     assert _titles(seeded, ContestQuery()) == ["시작일 없음", "접수중 AI", "예정 보안"]
     closed = ContestQuery(statuses=frozenset({ContestStatus.CLOSED}))
     assert _titles(seeded, closed) == ["오래된 마감", "마감 디자인"]
@@ -106,6 +112,7 @@ def test_find_filters_by_computed_status_and_sorts_by_deadline(seeded: ContestRe
 
 @pytest.mark.feature("F2-3")
 def test_find_field_or_and_keyword(seeded: ContestRepository) -> None:
+    """분야는 OR, 제목 검색은 대소문자 무시 부분 일치다."""
     query = ContestQuery(statuses=frozenset(ContestStatus), fields=("보안", "디자인"))
     assert sorted(_titles(seeded, query)) == ["마감 디자인", "예정 보안"]
     assert _titles(seeded, ContestQuery(keyword="ai")) == ["접수중 AI"]
@@ -113,6 +120,7 @@ def test_find_field_or_and_keyword(seeded: ContestRepository) -> None:
 
 @pytest.mark.feature("F2-3")
 def test_find_paginates_with_total(seeded: ContestRepository) -> None:
+    """페이지를 나누고 전체 건수를 함께 돌려준다."""
     query = ContestQuery(statuses=frozenset(ContestStatus), page=2, size=2)
     records, total = seeded.find(query, TODAY)
     assert total == 5
@@ -123,6 +131,7 @@ def test_find_paginates_with_total(seeded: ContestRepository) -> None:
 
 @pytest.mark.feature("F2-4")
 def test_get_by_id_and_unknown_ids(seeded: ContestRepository) -> None:
+    """ID 로 찾고, 없거나 잘못된 ID 는 None 이다."""
     first, _ = seeded.find(ContestQuery(size=1), TODAY)
     record = seeded.get(first[0].id)
     assert record is not None
@@ -133,6 +142,7 @@ def test_get_by_id_and_unknown_ids(seeded: ContestRepository) -> None:
 
 @pytest.mark.feature("F2-7")
 def test_get_many_skips_unknown_and_invalid_ids(seeded: ContestRepository) -> None:
+    """여러 ID 조회에서 없거나 잘못된 ID 는 건너뛴다."""
     records, _ = seeded.find(ContestQuery(size=2), TODAY)
     ids = [r.id for r in records]
 
@@ -144,6 +154,7 @@ def test_get_many_skips_unknown_and_invalid_ids(seeded: ContestRepository) -> No
 
 @pytest.mark.feature("F2-3")
 def test_delete_closed_before_keeps_three_days(seeded: ContestRepository) -> None:
+    """마감 후 3일이 지난 대회만 지운다."""
     assert seeded.delete_closed_before(date(2026, 10, 20)) == 1  # 10-19 마감만 삭제
     closed = ContestQuery(statuses=frozenset({ContestStatus.CLOSED}))
     assert _titles(seeded, closed) == ["마감 디자인"]
@@ -151,6 +162,7 @@ def test_delete_closed_before_keeps_three_days(seeded: ContestRepository) -> Non
 
 @pytest.mark.feature("F2-2")
 def test_changed_deadline_moves_existing_document(mongo_db: Database[Document]) -> None:
+    """대표 소스의 마감일이 바뀌면 새 문서를 만들지 않고 기존 문서를 옮긴다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("dacon", apply_end=date(2026, 11, 2)))
@@ -166,6 +178,7 @@ def test_changed_deadline_moves_existing_document(mongo_db: Database[Document]) 
 def test_concurrent_saves_keep_one_document_and_unique_sources(
     mongo_db: Database[Document],
 ) -> None:
+    """동시에 저장해도 문서 하나와 중복 없는 출처만 남는다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     key = merge_key("2026 AI 해커톤", "주최사", date(2026, 11, 1))
@@ -173,6 +186,7 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(
     barrier = threading.Barrier(len(contests))
 
     def save(contest: RawContest) -> SaveOutcome:
+        """배리어에서 함께 출발해 저장한다."""
         barrier.wait()  # 최대한 동시에 출발시킨다
         return repo.save(contest, key, now_kst(), tags=EligibilityTags())
 
@@ -190,6 +204,7 @@ def test_concurrent_saves_keep_one_document_and_unique_sources(
 def test_concurrent_saves_with_changed_deadline_keep_one_document(
     mongo_db: Database[Document],
 ) -> None:
+    """마감일이 바뀐 동시 저장에서도 문서가 하나만 남는다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("dacon", apply_end=date(2026, 11, 2)))
@@ -197,6 +212,7 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(
     barrier = threading.Barrier(len(changed))
 
     def save(contest: RawContest) -> SaveOutcome:
+        """배리어에서 함께 출발해 저장한다."""
         barrier.wait()
         return _save(repo, contest)
 
@@ -211,6 +227,7 @@ def test_concurrent_saves_with_changed_deadline_keep_one_document(
 
 @pytest.mark.feature("F3-1")
 def test_tags_follow_representative_source(mongo_db: Database[Document]) -> None:
+    """자격 태그는 대표 소스의 값을 따른다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(repo, _contest("a"), EligibilityTags(education=frozenset({"대학생"})))
@@ -223,6 +240,7 @@ def test_tags_follow_representative_source(mongo_db: Database[Document]) -> None
 
 @pytest.mark.feature("F3-3")
 def test_find_by_eligibility_keeps_wildcards_and_unclassified(mongo_db: Database[Document]) -> None:
+    """자격 필터는 제한 없음·미분류 대회를 빼지 않는다."""
     repo = ContestRepository(mongo_db)
     repo.ensure_indexes()
     _save(

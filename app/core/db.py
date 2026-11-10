@@ -18,15 +18,18 @@ Document = dict[str, Any]
 
 @lru_cache
 def get_settings() -> Settings:
+    """설정을 읽는다."""
     return Settings()
 
 
 @lru_cache
 def get_client() -> MongoClient[Document]:
+    """KST tz-aware 로 읽는 MongoDB 클라이언트를 만든다 (캐시)."""
     return MongoClient(get_settings().mongodb_uri, tz_aware=True, tzinfo=KST)
 
 
 def get_database() -> Database[Document]:
+    """대회 데이터를 담는 MongoDB 데이터베이스를 돌려준다."""
     return get_client()[get_settings().mongodb_db]
 
 
@@ -40,6 +43,7 @@ def ping() -> bool:
 
 
 def close_client() -> None:
+    """만들어 둔 MongoDB 클라이언트가 있으면 닫고 캐시를 비운다."""
     if get_client.cache_info().currsize:
         get_client().close()
         get_client.cache_clear()

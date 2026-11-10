@@ -24,10 +24,12 @@ Handler = Callable[[httpx.Request], httpx.Response]
 
 
 def _google(handler: Handler) -> GoogleOAuth:
+    """가짜 HTTP 핸들러로 응답하는 GoogleOAuth."""
     return GoogleOAuth(CONFIG, httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def _ok(request: httpx.Request) -> httpx.Response:
+    """토큰 교환과 사용자 정보 조회에 정상 응답한다."""
     if request.url == GoogleOAuth.TOKEN_URL:
         return httpx.Response(200, json={"access_token": "google-at", "id_token": "x"})
     assert request.headers["Authorization"] == "Bearer google-at"
@@ -36,6 +38,7 @@ def _ok(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.feature("F1-6")
 def test_authorization_url_requests_openid_scope_with_state() -> None:
+    """로그인 주소는 openid 범위와 state 를 싣는다."""
     url = _google(_ok).authorization_url("state-abc")
 
     parts = urlsplit(url)
@@ -52,9 +55,11 @@ def test_authorization_url_requests_openid_scope_with_state() -> None:
 
 @pytest.mark.feature("F1-6")
 def test_exchange_code_returns_google_subject_as_provider_id() -> None:
+    """인가 코드 교환 후 Google sub 를 제공자 ID 로 쓴다."""
     sent: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """보낸 요청을 기록하고 정상 응답한다."""
         sent.append(request)
         return _ok(request)
 
@@ -69,6 +74,7 @@ def test_exchange_code_returns_google_subject_as_provider_id() -> None:
 
 @pytest.mark.feature("F1-6")
 def test_rejected_code_raises_oauth_failed() -> None:
+    """Google 이 거절한 코드는 OAuthFailedError 다."""
     google = _google(lambda _: httpx.Response(400, json={"error": "invalid_grant"}))
 
     with pytest.raises(OAuthFailedError):
@@ -92,13 +98,17 @@ def test_rejected_code_raises_oauth_failed() -> None:
     ids=["server-error", "rate-limited", "not-json", "no-access-token", "no-subject"],
 )
 def test_broken_google_response_raises_unavailable(handler: Handler) -> None:
+    """Google 응답이 깨지면 OAuthUnavailableError 다."""
     with pytest.raises(OAuthUnavailableError):
         _google(handler).exchange_code("auth-code")
 
 
 @pytest.mark.feature("F1-6")
 def test_network_error_raises_unavailable() -> None:
+    """네트워크 오류는 OAuthUnavailableError 다."""
+
     def handler(request: httpx.Request) -> httpx.Response:
+        """연결 오류를 던진다."""
         raise httpx.ConnectError("unreachable", request=request)
 
     with pytest.raises(OAuthUnavailableError):

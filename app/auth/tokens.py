@@ -30,17 +30,23 @@ _REQUIRED_CLAIMS = ["sub", "jti", "fam", "type", "iat", "exp"]
 
 
 class TokenExpiredError(AppError):
+    """토큰이 만료됐을 때 (401)."""
+
     status_code = 401
     code = "TOKEN_EXPIRED"
 
 
 class TokenInvalidError(AppError):
+    """토큰이 위조·폐기·회전됐을 때 (401)."""
+
     status_code = 401
     code = "TOKEN_INVALID"
 
 
 @dataclass(frozen=True)
 class IssuedTokens:
+    """발급한 Access·Refresh Token 쌍."""
+
     access_token: str
     refresh_token: str
     access_expires_in: int  # 초
@@ -48,6 +54,8 @@ class IssuedTokens:
 
 @dataclass(frozen=True)
 class TokenClaims:
+    """검증을 통과한 토큰의 클레임."""
+
     user_id: int
     jti: str
     family_id: str  # 로그인 세션
@@ -55,6 +63,8 @@ class TokenClaims:
 
 
 class TokenIssuer:
+    """JWT 를 발급·검증하고 Refresh Token 을 회전한다."""
+
     def __init__(
         self,
         store: TokenStore,
@@ -62,6 +72,7 @@ class TokenIssuer:
         access_ttl: timedelta,
         refresh_ttl: timedelta,
     ) -> None:
+        """서명 키 길이를 검증하고 저장소와 TTL 을 받는다."""
         # HS256 키가 짧으면 서명을 추측할 수 있다 (RFC 7518 3.2). 기본값·빈 값도 여기서 막힌다
         if len(secret.encode()) < MIN_SECRET_BYTES:
             raise ValueError(f"JWT_SECRET 은 {MIN_SECRET_BYTES}바이트 이상이어야 합니다.")
@@ -153,6 +164,7 @@ class TokenIssuer:
         ttl: timedelta,
         extra: Mapping[str, str] | None = None,
     ) -> str:
+        """공통 클레임으로 JWT 를 서명한다."""
         claims = {
             "sub": str(user_id),
             "jti": jti,

@@ -53,12 +53,14 @@ def check_commit_message(message: str, *, is_pr_title: bool = False) -> str | No
 
 
 def check_branch_name(ref: str) -> str | None:
+    """브랜치명이 규약에 맞지 않으면 이유를 돌려준다."""
     if EXEMPT_BRANCH_RE.match(ref) or BRANCH_RE.match(ref):
         return None
     return "브랜치명은 'feature/{이슈번호}_{todo}' 또는 'hotfix/{이슈번호}_{todo}' 여야 한다"
 
 
 def commit_subjects(base: str) -> list[str]:
+    """base 이후 머지가 아닌 커밋의 제목 목록을 돌려준다."""
     out = subprocess.run(  # noqa: S603  고정된 git 인자만 사용
         ["git", "log", "--no-merges", "--format=%s", f"{base}..HEAD"],  # noqa: S607
         check=True,
@@ -70,6 +72,7 @@ def commit_subjects(base: str) -> list[str]:
 
 
 def main() -> int:
+    """브랜치명·PR 제목·커밋 메시지를 검사하고 위반이 있으면 1 을 돌려준다."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="비교 기준 ref (예: origin/develop). 없으면 커밋 검사 생략")
     parser.add_argument("--head-ref", help="PR 브랜치명")

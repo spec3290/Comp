@@ -34,11 +34,15 @@ class OAuthUnavailableError(AppError):
 
 @dataclass(frozen=True)
 class OAuthIdentity:
+    """제공자가 확인해 준 회원 식별자."""
+
     provider: str
     provider_id: str
 
 
 class OAuthProvider(Protocol):
+    """소셜 로그인 제공자 경계. 제공자마다 구현체를 둔다."""
+
     name: str
 
     @property
@@ -46,13 +50,19 @@ class OAuthProvider(Protocol):
         """제공자 콘솔에 등록한 콜백 주소."""
         ...
 
-    def authorization_url(self, state: str) -> str: ...
+    def authorization_url(self, state: str) -> str:
+        """state 를 실은 제공자 로그인 페이지 주소를 만든다."""
+        ...
 
-    def exchange_code(self, code: str) -> OAuthIdentity: ...
+    def exchange_code(self, code: str) -> OAuthIdentity:
+        """인가 코드를 회원 식별자로 바꾼다."""
+        ...
 
 
 @dataclass(frozen=True)
 class GoogleConfig:
+    """Google OAuth 클라이언트 설정."""
+
     client_id: str
     client_secret: str
     redirect_uri: str
@@ -67,14 +77,17 @@ class GoogleOAuth:
     USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
     def __init__(self, config: GoogleConfig, client: httpx.Client) -> None:
+        """설정과 공유 HTTP 클라이언트를 받는다."""
         self._config = config
         self._client = client
 
     @property
     def redirect_uri(self) -> str:
+        """Google 콘솔에 등록한 콜백 주소."""
         return self._config.redirect_uri
 
     def authorization_url(self, state: str) -> str:
+        """openid 범위로 Google 로그인 페이지 주소를 만든다."""
         params = {
             "client_id": self._config.client_id,
             "redirect_uri": self._config.redirect_uri,
@@ -85,6 +98,7 @@ class GoogleOAuth:
         return f"{self.AUTHORIZE_URL}?{urlencode(params)}"
 
     def exchange_code(self, code: str) -> OAuthIdentity:
+        """인가 코드를 토큰으로 바꾸고 사용자 ID 를 조회한다."""
         token = self._request(
             "POST",
             self.TOKEN_URL,
@@ -115,6 +129,7 @@ class GoogleOAuth:
         data: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
+        """Google API 를 호출하고 실패를 도메인 예외로 바꾼다."""
         try:
             response = self._client.request(method, url, data=data, headers=headers)
         except httpx.HTTPError as exc:

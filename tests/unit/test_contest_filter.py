@@ -22,6 +22,7 @@ CLOSED = {"apply_end": {"$lt": MIDNIGHT}}
 
 @pytest.mark.feature("F2-3")
 def test_default_query_excludes_closed() -> None:
+    """기본 조건은 마감 대회를 뺀다."""
     mongo_filter = build_filter(ContestQuery(), TODAY)
 
     assert mongo_filter == {"$or": [OPEN, UPCOMING]}
@@ -29,6 +30,7 @@ def test_default_query_excludes_closed() -> None:
 
 @pytest.mark.feature("F2-3")
 def test_values_or_within_and_across_params() -> None:
+    """한 파라미터 안은 OR, 파라미터끼리는 AND 다."""
     query = ContestQuery(
         statuses=frozenset({ContestStatus.CLOSED}), fields=("AI", "보안"), keyword="해커톤"
     )
@@ -49,6 +51,7 @@ def test_values_or_within_and_across_params() -> None:
 
 @pytest.mark.feature("F3-3")
 def test_eligibility_filter_keeps_wildcard_and_unclassified() -> None:
+    """자격 필터는 제한 없음·미분류 대회를 함께 고른다."""
     query = ContestQuery(
         statuses=frozenset(),
         eligibility=EligibilityTags(
@@ -76,6 +79,7 @@ def test_eligibility_filter_keeps_wildcard_and_unclassified() -> None:
 
 @pytest.mark.feature("F2-3")
 def test_search_text_is_not_treated_as_regex() -> None:
+    """검색어의 정규식 특수 문자는 그대로 이스케이프한다."""
     query = ContestQuery(statuses=frozenset(), keyword="C++ (.*)")
 
     assert build_filter(query, TODAY) == {"title": {"$regex": r"C\+\+\ \(\.\*\)", "$options": "i"}}
