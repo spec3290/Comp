@@ -32,10 +32,13 @@ class ContestStatus(StrEnum):
 
 @dataclass(frozen=True)
 class ApplyPeriod:
+    """접수 기간. 상태와 D-day 를 날짜로 계산한다."""
+
     start: date | None  # 없으면 이미 접수 중으로 본다 (Q-6)
     end: date
 
     def status(self, today: date) -> ContestStatus:
+        """기준 날짜의 접수 상태를 계산한다."""
         if self.start is not None and today < self.start:
             return ContestStatus.UPCOMING
         if today > self.end:
@@ -48,6 +51,8 @@ class ApplyPeriod:
 
 
 class SortOrder(StrEnum):
+    """목록 정렬 기준."""
+
     DEADLINE = "deadline"  # 마감 임박순
     LATEST = "latest"  # 최근 수집순
 
@@ -67,17 +72,23 @@ class Dimension(StrEnum):
 
 
 class Education(StrEnum):
+    """학력 자격 값."""
+
     HIGH_SCHOOL = "고등학생"
     UNIVERSITY = "대학생"
     ANY = "제한 없음"
 
 
 class TeamType(StrEnum):
+    """참가 형태 값."""
+
     SOLO = "개인"
     TEAM = "팀"
 
 
 class Region(StrEnum):
+    """지역 자격 값."""
+
     NATIONWIDE = "전국"
     SEOUL = "서울"
     BUSAN = "부산"
@@ -126,10 +137,12 @@ class EligibilityTags:
     region: frozenset[str] = frozenset()
 
     def get(self, dimension: Dimension) -> frozenset[str]:
+        """차원 하나의 태그 집합을 돌려준다."""
         values: frozenset[str] = getattr(self, dimension.value)
         return values
 
     def ordered(self, dimension: Dimension) -> list[str]:
+        """차원 하나의 태그를 어휘 순서대로 돌려준다."""
         values = self.get(dimension)
         return [v for v in VOCABULARY[dimension] if v in values]
 
@@ -144,6 +157,8 @@ NO_TAGS = EligibilityTags()
 
 @dataclass(frozen=True)
 class KeywordRule:
+    """키워드가 보이면 특정 차원에 값을 붙이는 분류 규칙."""
+
     dimension: Dimension
     value: str
     keywords: tuple[str, ...]
@@ -170,6 +185,7 @@ def parse_rules(data: dict[str, Any]) -> tuple[KeywordRule, ...]:
 
 
 def load_rules(path: Path = RULES_PATH) -> tuple[KeywordRule, ...]:
+    """TOML 파일에서 분류 규칙을 읽는다."""
     with path.open("rb") as f:
         return parse_rules(tomllib.load(f))
 

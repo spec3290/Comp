@@ -23,18 +23,23 @@ NON_FIELD_TAGS = frozenset({CONTEST_TAG, "온라인", "오프라인", "무료", 
 
 
 class DevEventSource:
+    """dev-event 목록 페이지 수집기."""
+
     name = NAME
 
     def __init__(self, client: httpx.Client) -> None:
+        """공유 HTTP 클라이언트를 받는다."""
         self._client = client
 
     def fetch(self) -> list[RawContest]:
+        """목록 페이지를 가져와 파싱한다."""
         res = self._client.get(URL)
         res.raise_for_status()
         return parse_page(res.text)
 
 
 def parse_page(html: str) -> list[RawContest]:
+    """페이지에 박힌 __NEXT_DATA__ 에서 행사 목록을 꺼낸다."""
     match = NEXT_DATA_RE.search(html)
     if match is None:
         raise ValueError("dev_event: __NEXT_DATA__ 를 찾지 못했다")
@@ -44,6 +49,7 @@ def parse_page(html: str) -> list[RawContest]:
 
 
 def _to_contest(event: dict[str, Any]) -> RawContest | None:
+    """대회 태그가 붙은 행사만 RawContest 로 바꾼다."""
     tags = [tag["tag_name"] for tag in event["tags"]]
     if CONTEST_TAG not in tags:
         return None

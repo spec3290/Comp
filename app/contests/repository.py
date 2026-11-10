@@ -43,6 +43,8 @@ COLLECTION = "contests"
 
 
 class SaveOutcome(StrEnum):
+    """대회 저장 결과 종류."""
+
     INSERTED = "inserted"  # 새 대회
     UPDATED = "updated"  # 대표 소스가 다시 수집해 값을 갱신
     MERGED = "merged"  # 다른 소스의 같은 대회, 출처만 추가·갱신
@@ -50,6 +52,8 @@ class SaveOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class ContestRecord:
+    """MongoDB 에서 읽은 대회 한 건."""
+
     id: str
     title: str
     host: str
@@ -72,10 +76,12 @@ _SORT_KEYS: dict[SortOrder, list[tuple[str, int]]] = {
 
 
 def _to_datetime(value: date | None) -> datetime | None:
+    """날짜를 KST 자정 datetime 으로 바꾼다 (MongoDB 는 date 를 저장하지 못한다)."""
     return None if value is None else datetime.combine(value, time.min, tzinfo=KST)
 
 
 def _to_date(value: datetime | None) -> date | None:
+    """저장된 datetime 을 KST 날짜로 되돌린다."""
     return None if value is None else value.astimezone(KST).date()
 
 
@@ -106,6 +112,7 @@ def _eligibility_filter(dimension: Dimension, requested: frozenset[str]) -> dict
 
 
 def build_filter(query: ContestQuery, today: date) -> dict[str, Any]:
+    """목록 조회 조건을 MongoDB 필터로 바꾼다."""
     midnight = datetime.combine(today, time.min, tzinfo=KST)
     conditions: list[dict[str, Any]] = []
     if query.statuses:
@@ -123,6 +130,7 @@ def build_filter(query: ContestQuery, today: date) -> dict[str, Any]:
 
 
 def _fields(contest: RawContest) -> dict[str, Any]:
+    """수집한 대회를 저장할 필드 문서로 바꾼다."""
     return {
         "title": contest.title,
         "host": contest.host,
@@ -138,6 +146,7 @@ def _fields(contest: RawContest) -> dict[str, Any]:
 
 
 def _tags_doc(tags: EligibilityTags) -> dict[str, list[str]]:
+    """자격 태그를 차원별 정렬된 목록 문서로 바꾼다."""
     return {d.value: tags.ordered(d) for d in Dimension}
 
 
@@ -147,6 +156,7 @@ def _to_tags(doc: dict[str, list[str]]) -> EligibilityTags:
 
 
 def _to_record(doc: Document) -> ContestRecord:
+    """MongoDB 문서를 ContestRecord 로 바꾼다."""
     apply_end = _to_date(doc["apply_end"])
     if apply_end is None:
         raise ValueError(f"apply_end 가 없는 대회 문서: {doc['_id']}")
@@ -168,10 +178,14 @@ def _to_record(doc: Document) -> ContestRecord:
 
 
 class ContestRepository:
+    """MongoDB 대회 컬렉션 저장소."""
+
     def __init__(self, db: Database[Document]) -> None:
+        """대회 컬렉션을 잡는다."""
         self._contests = db[COLLECTION]
 
     def ensure_indexes(self) -> None:
+        """병합 키 유일 인덱스와 조회용 인덱스를 만든다."""
         self._contests.create_index([("merge_key", ASCENDING)], unique=True)
         self._contests.create_index([("apply_end", ASCENDING)])
         self._contests.create_index([("source", ASCENDING), ("source_url", ASCENDING)])
@@ -273,6 +287,7 @@ class ContestRepository:
         return [_to_record(doc) for doc in cursor], total
 
     def get(self, contest_id: str) -> ContestRecord | None:
+        """ID 로 대회를 찾는다. 잘못된 ID 면 None."""
         if not ObjectId.is_valid(contest_id):
             return None
         doc = self._contests.find_one({"_id": ObjectId(contest_id)})
@@ -294,12 +309,17 @@ class ContestRepository:
 
 @dataclass(frozen=True)
 class BookmarkRecord:
+    """회원이 저장한 대회 한 건."""
+
     contest_id: str
     created_at: datetime
 
 
 class BookmarkRepository:
+    """PostgreSQL 대회 저장(북마크) 저장소."""
+
     def __init__(self, session: Session) -> None:
+        """요청 단위 세션을 받는다."""
         self._session = session
 
     def add(self, user_id: int, contest_id: str, now: datetime) -> None:
@@ -314,6 +334,7 @@ class BookmarkRepository:
             self._session.rollback()
 
     def remove(self, user_id: int, contest_id: str) -> None:
+        """저장한 대회를 지운다. 없어도 오류가 아니다."""
         self._session.execute(
             delete(Bookmark).where(Bookmark.user_id == user_id, Bookmark.contest_id == contest_id)
         )

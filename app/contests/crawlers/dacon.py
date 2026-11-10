@@ -31,18 +31,23 @@ _APPLY_PERIOD = re.compile(
 
 
 class DaconSource:
+    """DACON 공식 대회 API 수집기."""
+
     name = NAME
 
     def __init__(self, client: httpx.Client) -> None:
+        """공유 HTTP 클라이언트를 받는다."""
         self._client = client
 
     def fetch(self) -> list[RawContest]:
+        """공식 대회 목록을 가져온다."""
         res = self._client.get(URL, params={"is_official": 1}, timeout=TIMEOUT_SECONDS)
         res.raise_for_status()
         return parse_competitions(res.json())
 
 
 def parse_competitions(payload: dict[str, Any]) -> list[RawContest]:
+    """API 응답을 RawContest 목록으로 바꾼다."""
     return convert_each(payload["data"], _to_contest, NAME)
 
 
@@ -60,6 +65,7 @@ def parse_apply_period(schedule_html: str | None) -> tuple[date, date] | None:
 
 
 def _to_contest(item: dict[str, Any]) -> RawContest | None:
+    """공개 대회 한 건을 RawContest 로 바꾸고, 비공개면 None."""
     if not (item.get("is_public") and item.get("show_cpt_list")):
         return None
     url = DETAIL_URL.format(cpt_id=item["cpt_id"])

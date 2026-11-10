@@ -8,6 +8,7 @@ import pytest
 
 
 def _load() -> ModuleType:
+    """scripts/check_conventions.py 를 모듈로 불러온다."""
     path = Path(__file__).resolve().parents[2] / "scripts" / "check_conventions.py"
     spec = importlib.util.spec_from_file_location("check_conventions", path)
     assert spec is not None
@@ -33,6 +34,7 @@ conv = _load()
     ],
 )
 def test_valid_commit_messages(message: str) -> None:
+    """규약에 맞는 커밋 메시지는 통과한다."""
     assert conv.check_commit_message(message) is None
 
 
@@ -48,10 +50,12 @@ def test_valid_commit_messages(message: str) -> None:
     ],
 )
 def test_invalid_commit_messages(message: str) -> None:
+    """규약에 어긋난 커밋 메시지는 거절한다."""
     assert conv.check_commit_message(message) is not None
 
 
 def test_pr_title_requires_issue_number() -> None:
+    """PR 제목에는 이슈 번호가 있어야 한다."""
     assert conv.check_commit_message("⚡ :: 로그인 추가", is_pr_title=True) is not None
     assert conv.check_commit_message("⚡ :: (#3) 로그인 추가", is_pr_title=True) is None
 
@@ -68,4 +72,5 @@ def test_pr_title_requires_issue_number() -> None:
     ],
 )
 def test_branch_names(ref: str, ok: bool) -> None:
+    """브랜치명 규약과 예외 브랜치를 검사한다."""
     assert (conv.check_branch_name(ref) is None) is ok

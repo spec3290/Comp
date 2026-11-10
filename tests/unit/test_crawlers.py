@@ -1,3 +1,5 @@
+"""수집기 파싱·HTTP 동작 테스트 (F2-1). 실제 네트워크를 호출하지 않는다."""
+
 import json
 from datetime import date
 from typing import Any
@@ -11,6 +13,7 @@ from app.contests.crawlers.devpost import DevpostSource, parse_period
 
 
 def _dev_event(**overrides: Any) -> dict[str, Any]:
+    """dev-event 행사 한 건 데이터."""
     event = {
         "id": 1,
         "title": " 2026 AI 해커톤 ",
@@ -26,16 +29,19 @@ def _dev_event(**overrides: Any) -> dict[str, Any]:
 
 
 def _dev_event_page(events: list[dict[str, Any]]) -> str:
+    """행사 목록을 __NEXT_DATA__ 로 박은 HTML."""
     data = {"props": {"pageProps": {"fallbackData": [{"dev_event": events}]}}}
     return f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
 
 
 def _client(handler: Any) -> httpx.Client:
+    """주어진 핸들러로 응답하는 가짜 HTTP 클라이언트."""
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 @pytest.mark.feature("F2-1")
 def test_dev_event_keeps_only_contests_and_maps_recruit_period() -> None:
+    """대회 태그가 있는 행사만 남기고 모집 기간을 접수 기간으로 옮긴다."""
     page = _dev_event_page(
         [
             _dev_event(),
@@ -60,6 +66,7 @@ def test_dev_event_keeps_only_contests_and_maps_recruit_period() -> None:
 
 @pytest.mark.feature("F2-1")
 def test_dev_event_without_next_data_raises() -> None:
+    """__NEXT_DATA__ 가 없으면 실패한다."""
     source = DevEventSource(_client(lambda _: httpx.Response(200, text="<html></html>")))
     with pytest.raises(ValueError, match="__NEXT_DATA__"):
         source.fetch()
@@ -67,6 +74,7 @@ def test_dev_event_without_next_data_raises() -> None:
 
 @pytest.mark.feature("F2-1")
 def test_dacon_maps_public_competitions() -> None:
+    """공개 대회만 RawContest 로 바꾼다."""
     payload = {
         "data": [
             {
@@ -120,10 +128,12 @@ def test_dacon_maps_public_competitions() -> None:
 def test_dacon_parses_apply_period_from_schedule(
     schedule: str | None, expected: tuple[date, date] | None
 ) -> None:
+    """일정 문구에서 참가 기간을 읽는다."""
     assert parse_apply_period(schedule) == expected
 
 
 def _hackathon(hackathon_id: int, **overrides: Any) -> dict[str, Any]:
+    """Devpost 해커톤 한 건 데이터."""
     item = {
         "id": hackathon_id,
         "title": " PayPal AI Hackathon ",
@@ -140,6 +150,7 @@ def _hackathon(hackathon_id: int, **overrides: Any) -> dict[str, Any]:
 
 @pytest.mark.feature("F2-1")
 def test_devpost_paginates_each_status_and_uses_hackathon_page_as_apply_url() -> None:
+    """상태별로 페이지를 끝까지 넘기고 해커톤 페이지를 신청 주소로 쓴다."""
     pages = {
         ("open", "1"): [_hackathon(1), _hackathon(2)],
         ("open", "2"): [_hackathon(3)],
@@ -149,6 +160,7 @@ def test_devpost_paginates_each_status_and_uses_hackathon_page_as_apply_url() ->
     requested: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """상태·페이지별 응답을 돌려주고 요청을 기록한다."""
         key = (request.url.params["status[]"], request.url.params["page"])
         requested.append(key)
         body = {"hackathons": pages.get(key, []), "meta": {"total_count": totals[key[0]]}}
@@ -168,6 +180,7 @@ def test_devpost_paginates_each_status_and_uses_hackathon_page_as_apply_url() ->
 
 @pytest.mark.feature("F2-1")
 def test_devpost_skips_offline_invite_only_and_broken_hackathons() -> None:
+    """해외 오프라인·초대 전용·기간을 읽을 수 없는 해커톤은 건너뛴다."""
     items = [
         _hackathon(1),
         _hackathon(2, displayed_location={"icon": "map-marker", "location": "Seattle"}),
@@ -177,6 +190,7 @@ def test_devpost_skips_offline_invite_only_and_broken_hackathons() -> None:
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """open 상태에만 해커톤을 돌려준다."""
         found = items if request.url.params["status[]"] == "open" else []
         return httpx.Response(200, json={"hackathons": found, "meta": {"total_count": len(found)}})
 
@@ -214,9 +228,11 @@ def test_devpost_skips_offline_invite_only_and_broken_hackathons() -> None:
 def test_devpost_collects_online_or_offline_in_korea_only(
     icon: str, location: str, collected: bool
 ) -> None:
+    """온라인이거나 한국 개최 오프라인만 수집한다."""
     item = _hackathon(1, displayed_location={"icon": icon, "location": location})
 
     def handler(request: httpx.Request) -> httpx.Response:
+        """open 상태에만 해커톤을 돌려준다."""
         found = [item] if request.url.params["status[]"] == "open" else []
         return httpx.Response(200, json={"hackathons": found, "meta": {"total_count": len(found)}})
 
@@ -227,6 +243,7 @@ def test_devpost_collects_online_or_offline_in_korea_only(
 
 @pytest.mark.feature("F2-1")
 def test_devpost_http_error_raises() -> None:
+    """HTTP 오류는 예외로 올린다."""
     source = DevpostSource(_client(lambda _: httpx.Response(503)), delay_seconds=0)
     with pytest.raises(httpx.HTTPStatusError):
         source.fetch()
@@ -244,11 +261,13 @@ def test_devpost_http_error_raises() -> None:
     ],
 )
 def test_devpost_parses_submission_period(text: str, expected: tuple[date, date]) -> None:
+    """제출 기간 문구를 날짜로 읽는다."""
     assert parse_period(text) == expected
 
 
 @pytest.mark.feature("F2-1")
 @pytest.mark.parametrize("text", ["TBD", "Foo 01 - 05, 2026", "Feb 30, 2027"])
 def test_devpost_rejects_unknown_period(text: str) -> None:
+    """읽을 수 없는 기간 문구는 거절한다."""
     with pytest.raises(ValueError):
         parse_period(text)

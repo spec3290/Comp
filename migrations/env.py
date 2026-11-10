@@ -20,6 +20,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    """DB 연결 없이 SQL 스크립트로 마이그레이션을 만든다."""
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
@@ -31,6 +32,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    """DB 에 연결해 마이그레이션을 적용한다."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

@@ -16,6 +16,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """학년을 정수로 바꾸고 닉네임 유일 제약과 관심 분야 테이블을 추가한다."""
     # F1-7 이전에는 프로필을 쓰는 곳이 없어 grade 는 모두 NULL 이다
     op.alter_column(
         "users",
@@ -38,6 +39,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """관심 분야 테이블과 닉네임 제약을 지우고 학년을 문자열로 되돌린다."""
     op.drop_table("user_interest_fields")
     op.drop_constraint("uq_users_nickname", "users", type_="unique")
     op.alter_column(

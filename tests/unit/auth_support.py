@@ -26,13 +26,19 @@ class HttpResponse(Protocol):
     """TestClient 응답 중 여기서 쓰는 부분. TestClient 가 쓰는 httpx 패키지에 묶이지 않는다."""
 
     @property
-    def status_code(self) -> int: ...
+    def status_code(self) -> int:
+        """HTTP 상태 코드."""
+        ...
 
     @property
-    def headers(self) -> Mapping[str, str]: ...
+    def headers(self) -> Mapping[str, str]:
+        """응답 헤더."""
+        ...
 
     @property
-    def text(self) -> str: ...
+    def text(self) -> str:
+        """응답 본문 문자열."""
+        ...
 
 
 class FakeProvider:
@@ -41,13 +47,16 @@ class FakeProvider:
     name = "google"
 
     def __init__(self, codes: dict[str, str], redirect_uri: str = "http://testserver/cb") -> None:
+        """인가 코드와 제공자 ID 대응표를 받는다."""
         self.codes = codes
         self.redirect_uri = redirect_uri
 
     def authorization_url(self, state: str) -> str:
+        """state 를 실은 가짜 로그인 주소."""
         return f"https://accounts.example.com/auth?state={state}"
 
     def exchange_code(self, code: str) -> OAuthIdentity:
+        """알려진 코드는 식별자로, 장애 코드는 연결 실패로, 나머지는 거절로 처리한다."""
         if code == OUTAGE_CODE:
             raise OAuthUnavailableError("Google 로그인 서버에 연결할 수 없습니다.")
         if code not in self.codes:
@@ -87,15 +96,18 @@ def login(client: TestClient, code: str = "code-a") -> dict[str, object]:
 
 
 def claims(token: object) -> dict[str, object]:
+    """테스트 키로 JWT 를 풀어 클레임을 돌려준다."""
     assert isinstance(token, str)
     decoded: dict[str, object] = jwt.decode(token, SECRET, algorithms=[JWT_ALGORITHM])
     return decoded
 
 
 def bearer(token: object) -> dict[str, str]:
+    """Authorization 헤더를 만든다."""
     assert isinstance(token, str)
     return {"Authorization": f"Bearer {token}"}
 
 
 def user_count(session: Session) -> int:
+    """가입한 회원 수."""
     return session.scalar(select(func.count()).select_from(User)) or 0

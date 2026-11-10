@@ -21,12 +21,14 @@ from tests.unit.auth_support import REFRESH_TTL, bearer, claims, login
 
 
 def _refresh(client: TestClient, token: object) -> tuple[int, dict[str, object]]:
+    """재발급을 요청하고 상태 코드와 본문을 돌려준다."""
     response = client.post("/auth/refresh", json={"refresh_token": token})
     body: dict[str, object] = response.json()
     return response.status_code, body
 
 
 def _error_code(body: dict[str, object]) -> object:
+    """에러 응답의 error.code."""
     error = body["error"]
     assert isinstance(error, dict)
     return error["code"]
@@ -34,6 +36,7 @@ def _error_code(body: dict[str, object]) -> object:
 
 @pytest.mark.feature("F1-4")
 def test_refresh_returns_new_pair_in_same_family(client: TestClient) -> None:
+    """재발급은 같은 family 의 새 토큰 쌍을 돌려준다."""
     first = login(client)
 
     status, body = _refresh(client, first["refresh_token"])
@@ -50,6 +53,7 @@ def test_refresh_returns_new_pair_in_same_family(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-4")
 def test_rotated_refresh_cannot_be_used_again(client: TestClient) -> None:
+    """회전된 Refresh Token 은 다시 쓸 수 없다."""
     first = login(client)
     _refresh(client, first["refresh_token"])
 
@@ -61,6 +65,7 @@ def test_rotated_refresh_cannot_be_used_again(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-4")
 def test_reusing_rotated_refresh_revokes_whole_family(client: TestClient) -> None:
+    """회전된 토큰을 재사용하면 family 전체를 폐기한다."""
     first = login(client)
     _, second = _refresh(client, first["refresh_token"])
 
@@ -73,6 +78,7 @@ def test_reusing_rotated_refresh_revokes_whole_family(client: TestClient) -> Non
 
 @pytest.mark.feature("F1-4")
 def test_reuse_revokes_only_that_family(client: TestClient) -> None:
+    """재사용 폐기는 그 family 에만 미친다."""
     phone = login(client)
     laptop = login(client)  # 같은 회원의 다른 로그인 = 다른 family
     _refresh(client, phone["refresh_token"])
@@ -87,6 +93,7 @@ def test_reuse_revokes_only_that_family(client: TestClient) -> None:
 def test_expired_refresh_returns_token_expired(
     client: TestClient, session: Session, issuer: TokenIssuer
 ) -> None:
+    """만료된 Refresh Token 은 TOKEN_EXPIRED 401 이다."""
     login(client)
     user = session.scalars(select(User)).one()
     stale = issuer.issue(user.id, now_kst() - REFRESH_TTL - timedelta(seconds=1))
@@ -99,6 +106,7 @@ def test_expired_refresh_returns_token_expired(
 
 @pytest.mark.feature("F1-4")
 def test_forged_refresh_returns_token_invalid(client: TestClient) -> None:
+    """다른 키로 서명한 토큰은 TOKEN_INVALID 401 이다."""
     payload = claims(login(client)["refresh_token"])
     forged = jwt.encode(payload, "attacker-secret-that-is-32-bytes-long", JWT_ALGORITHM)
 
@@ -111,6 +119,7 @@ def test_forged_refresh_returns_token_invalid(client: TestClient) -> None:
 @pytest.mark.feature("F1-4")
 @pytest.mark.parametrize("token", ["not-a-jwt", "a.b.c"])
 def test_malformed_refresh_returns_token_invalid(client: TestClient, token: str) -> None:
+    """형식이 깨진 토큰은 TOKEN_INVALID 401 이다."""
     status, body = _refresh(client, token)
 
     assert status == 401
@@ -119,6 +128,7 @@ def test_malformed_refresh_returns_token_invalid(client: TestClient, token: str)
 
 @pytest.mark.feature("F1-4")
 def test_access_token_cannot_be_used_as_refresh(client: TestClient) -> None:
+    """Access Token 으로는 재발급할 수 없다."""
     status, body = _refresh(client, login(client)["access_token"])
 
     assert status == 401
@@ -129,6 +139,7 @@ def test_access_token_cannot_be_used_as_refresh(client: TestClient) -> None:
 def test_refresh_missing_from_store_returns_token_invalid(
     client: TestClient, redis: fakeredis.FakeRedis
 ) -> None:
+    """저장소에 없는 Refresh Token 은 TOKEN_INVALID 401 이다."""
     token = login(client)["refresh_token"]
     redis.flushall()
 
@@ -142,6 +153,7 @@ def test_refresh_missing_from_store_returns_token_invalid(
 def test_refresh_of_deleted_user_returns_token_invalid(
     client: TestClient, session: Session
 ) -> None:
+    """탈퇴한 회원의 Refresh Token 은 TOKEN_INVALID 401 이다."""
     token = login(client)["refresh_token"]
     session.delete(session.scalars(select(User)).one())
     session.commit()
@@ -154,6 +166,7 @@ def test_refresh_of_deleted_user_returns_token_invalid(
 
 @pytest.mark.feature("F1-4")
 def test_refresh_without_token_returns_400(client: TestClient) -> None:
+    """토큰 없이 재발급하면 400 이다."""
     response = client.post("/auth/refresh", json={})
 
     assert response.status_code == 400
@@ -162,6 +175,7 @@ def test_refresh_without_token_returns_400(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-4")
 def test_concurrent_consume_marks_only_one_as_first_use(redis: fakeredis.FakeRedis) -> None:
+    """같은 토큰을 두 번 소비하면 처음만 첫 사용이고 다음은 재사용으로 본다."""
     store = TokenStore(redis)
     store.save("jti-1", 7, "family-1", REFRESH_TTL)
 
@@ -177,6 +191,7 @@ def test_concurrent_consume_marks_only_one_as_first_use(redis: fakeredis.FakeRed
 
 @pytest.mark.feature("F1-4")
 def test_valid_access_token_passes(protected: TestClient, issuer: TokenIssuer) -> None:
+    """유효한 Access Token 은 통과한다."""
     tokens = issuer.issue(42, now_kst())
 
     response = protected.get("/protected", headers=bearer(tokens.access_token))
@@ -194,6 +209,7 @@ def test_valid_access_token_passes(protected: TestClient, issuer: TokenIssuer) -
 def test_missing_or_bad_access_token_returns_token_invalid(
     protected: TestClient, headers: dict[str, str]
 ) -> None:
+    """없거나 잘못된 Access Token 은 TOKEN_INVALID 401 이다."""
     response = protected.get("/protected", headers=headers)
 
     assert response.status_code == 401
@@ -204,6 +220,7 @@ def test_missing_or_bad_access_token_returns_token_invalid(
 def test_expired_access_token_returns_token_expired(
     protected: TestClient, issuer: TokenIssuer
 ) -> None:
+    """만료된 Access Token 은 TOKEN_EXPIRED 401 이다."""
     tokens = issuer.issue(42, now_kst() - timedelta(minutes=16))
 
     response = protected.get("/protected", headers=bearer(tokens.access_token))
@@ -214,6 +231,7 @@ def test_expired_access_token_returns_token_expired(
 
 @pytest.mark.feature("F1-4")
 def test_refresh_token_cannot_be_used_as_access(protected: TestClient, issuer: TokenIssuer) -> None:
+    """Refresh Token 으로는 API 를 호출할 수 없다."""
     tokens = issuer.issue(42, now_kst())
 
     response = protected.get("/protected", headers=bearer(tokens.refresh_token))
@@ -225,12 +243,14 @@ def test_refresh_token_cannot_be_used_as_access(protected: TestClient, issuer: T
 @pytest.mark.feature("F1-4")
 @pytest.mark.parametrize("secret", ["", "dev-only-secret", "x" * 31])
 def test_short_jwt_secret_is_rejected(redis: fakeredis.FakeRedis, secret: str) -> None:
+    """32바이트보다 짧은 서명 키는 거절한다."""
     with pytest.raises(ValueError, match="32"):
         TokenIssuer(TokenStore(redis), secret, timedelta(minutes=15), REFRESH_TTL)
 
 
 @pytest.mark.feature("F1-4")
 def test_refresh_response_is_not_cached(client: TestClient) -> None:
+    """재발급 응답은 캐시하지 않는다."""
     token = login(client)["refresh_token"]
 
     response = client.post("/auth/refresh", json={"refresh_token": token})
@@ -242,6 +262,7 @@ def test_refresh_response_is_not_cached(client: TestClient) -> None:
 def test_refresh_racing_with_reuse_cannot_survive_in_revoked_family(
     client: TestClient, issuer: TokenIssuer, redis: fakeredis.FakeRedis
 ) -> None:
+    """재발급과 재사용 폐기가 겹쳐도 폐기된 family 에 새 토큰이 살아남지 않는다."""
     token = login(client)["refresh_token"]
     assert isinstance(token, str)
 
@@ -258,6 +279,7 @@ def test_refresh_racing_with_reuse_cannot_survive_in_revoked_family(
 def test_new_login_family_is_not_affected_by_revoked_family(
     redis: fakeredis.FakeRedis,
 ) -> None:
+    """새 로그인 family 는 폐기된 family 의 영향을 받지 않는다."""
     store = TokenStore(redis)
     store.revoke_family("old-family", REFRESH_TTL)
 
@@ -267,6 +289,7 @@ def test_new_login_family_is_not_affected_by_revoked_family(
 
 @pytest.mark.feature("F1-4")
 def test_app_refuses_to_start_with_short_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """서명 키가 짧으면 앱이 기동하지 않는다."""
     monkeypatch.setattr(service_module, "get_settings", lambda: Settings(jwt_secret="short"))
     get_token_issuer.cache_clear()
 

@@ -55,19 +55,24 @@ _PERIOD = re.compile(
 
 
 class DevpostSource:
+    """Devpost 해커톤 API 수집기."""
+
     name = NAME
 
     def __init__(self, client: httpx.Client, delay_seconds: float = 1.0) -> None:
+        """공유 HTTP 클라이언트와 요청 간 지연을 받는다."""
         self._client = client
         self._delay = delay_seconds
 
     def fetch(self) -> list[RawContest]:
+        """모집 상태별로 해커톤을 모아 RawContest 로 바꾼다."""
         items: list[dict[str, Any]] = []
         for status in STATUSES:
             items.extend(self._fetch_status(status))
         return convert_each(items, _to_contest, NAME)
 
     def _fetch_status(self, status: str) -> list[dict[str, Any]]:
+        """상태 하나의 해커톤을 페이지 끝까지 가져온다."""
         items: list[dict[str, Any]] = []
         for page in range(1, MAX_PAGES + 1):
             res = self._client.get(URL, params={"status[]": status, "page": page})
@@ -106,6 +111,7 @@ def _is_reachable(location: dict[str, Any]) -> bool:
 
 
 def _to_contest(item: dict[str, Any]) -> RawContest | None:
+    """초대 전용이 아니고 참가 가능한 해커톤만 RawContest 로 바꾼다."""
     if item.get("invite_only") or not _is_reachable(item["displayed_location"]):
         return None
     start, end = parse_period(item["submission_period_dates"])

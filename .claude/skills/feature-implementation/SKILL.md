@@ -13,10 +13,11 @@ description: docs/features.md의 기능(F1-6 등)을 구현하거나 수정할 �
 2. **결정 확인** — decisions.md의 `결정이 필요한 항목`에서 이 기능에 걸린 Q-번호가 `열림`인지 본다. 열려 있으면 제안 기본값으로 가도 되는지 사용자에게 묻고, 답을 받으면 decisions.md에 반영한다. 추측으로 구현하지 않는다.
 3. **이슈·브랜치** — `git-workflow` 스킬로 이슈를 만들고 `feature/{번호}_{todo}` 브랜치를 만든다.
 4. **테스트 먼저** — 수용 기준 항목마다 테스트를 쓴다. 이름은 동작으로 쓴다 (`test_closed_contest_click_returns_409`). `@pytest.mark.feature("F2-5")`를 단다. 시간 의존 테스트는 기준 날짜를 인자로 넘겨 고정하고 경계값(마감 당일, 시작 전날)을 넣는다. 테스트는 실제 네트워크를 호출하지 않는다.
-5. **안쪽부터 구현** — 아래 순서로 만든다.
+5. **안쪽부터 구현** — 아래 순서로 만든다. 새로 쓰거나 고친 모듈·클래스·함수마다 한 줄 docstring을 단다 (AGENTS.md 하드 규칙).
 6. **로컬 사전 점검(권장)** — `uv run ruff format . && uv run ruff check .`, `uv run mypy`, `uv run lint-imports`, `uv run pytest`. 통과 기준은 CI다.
 7. **명세 갱신** — features.md의 해당 기능 상태를 `wip`/`done`으로 바꾼다. 테스트가 있는 기능만 `done`. API·데이터 모델이 바뀌면 decisions.md의 ADR-0004/0005를 같은 변경에서 고친다.
-8. **커밋·PR** — `git-workflow` 스킬 규칙으로 커밋하고 PR을 올린다. CI가 통과한 뒤 `code-review` 스킬로 리뷰를 요청한다.
+8. **리뷰 기록** — `code-review` 스킬로 내 변경분을 점검하고 결과를 `st/YYYY-MM-DD_{todo}.md`에 남긴다.
+9. **커밋·PR** — `git-workflow` 스킬 규칙으로 리뷰 기록과 함께 커밋하고 PR을 올린다. CI가 통과한 뒤 `code-review` 스킬로 리뷰를 요청한다.
 
 ## 레이어별 구현 순서 (ADR-0007, AC-1~3 준수)
 

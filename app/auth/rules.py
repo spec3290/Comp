@@ -16,6 +16,8 @@ GRADE_MAX = 6
 
 
 class SchoolType(StrEnum):
+    """학교 구분."""
+
     MIDDLE = "중학교"
     HIGH = "고등학교"
     UNIVERSITY = "대학교"
@@ -23,6 +25,8 @@ class SchoolType(StrEnum):
 
 
 class InterestField(StrEnum):
+    """선택할 수 있는 관심 분야."""
+
     DEV = "개발"
     AI = "AI"
     SECURITY = "보안"
@@ -47,6 +51,8 @@ def ordered_fields(fields: set[InterestField] | frozenset[InterestField]) -> lis
 
 @dataclass(frozen=True)
 class ProfileInput:
+    """검증을 마친 프로필 입력값."""
+
     nickname: str  # normalize_nickname 을 거친 값
     grade: int | None
     school_type: SchoolType

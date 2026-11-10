@@ -1,7 +1,11 @@
+"""환경변수로 읽는 애플리케이션 설정."""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """DB·Redis·JWT·OAuth 접속 정보. 비밀 값은 환경변수로만 넣는다."""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "sqlite:///./dev.db"

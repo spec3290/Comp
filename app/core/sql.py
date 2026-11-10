@@ -17,7 +17,7 @@ from app.core.time import KST
 
 
 class Base(DeclarativeBase):
-    pass
+    """SQLAlchemy 모델의 공통 기반 클래스."""
 
 
 class AwareDateTime(TypeDecorator[datetime]):
@@ -30,6 +30,7 @@ class AwareDateTime(TypeDecorator[datetime]):
     cache_ok = True
 
     def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        """저장할 때 naive 시각을 거부하고 UTC 로 바꾼다."""
         if value is None:
             return None
         if value.tzinfo is None:
@@ -37,6 +38,7 @@ class AwareDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC)
 
     def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        """읽을 때 UTC 로 해석해 KST 로 바꾼다."""
         if value is None:
             return None
         if value.tzinfo is None:
@@ -46,11 +48,13 @@ class AwareDateTime(TypeDecorator[datetime]):
 
 @lru_cache
 def get_engine() -> Engine:
+    """PostgreSQL 엔진을 만든다 (캐시)."""
     return create_engine(get_settings().database_url, pool_pre_ping=True)
 
 
 @lru_cache
 def _session_factory() -> sessionmaker[Session]:
+    """엔진에 묶인 세션 팩토리를 만든다 (캐시)."""
     return sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 
@@ -61,6 +65,7 @@ def get_session() -> Iterator[Session]:
 
 
 def dispose_engine() -> None:
+    """만들어 둔 엔진이 있으면 정리하고 캐시를 비운다."""
     if get_engine.cache_info().currsize:
         get_engine().dispose()
         get_engine.cache_clear()

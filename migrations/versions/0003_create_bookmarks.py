@@ -17,6 +17,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    """bookmarks 테이블을 만든다."""
     op.create_table(
         "bookmarks",
         sa.Column(
@@ -32,4 +33,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """bookmarks 테이블을 지운다."""
     op.drop_table("bookmarks")

@@ -20,12 +20,14 @@ PROFILE = {
 
 
 def _put(client: TestClient, access: object, **changes: object) -> tuple[int, dict[str, object]]:
+    """프로필 저장을 요청하고 상태 코드와 본문을 돌려준다."""
     response = client.put("/users/me/profile", headers=bearer(access), json={**PROFILE, **changes})
     body: dict[str, object] = response.json()
     return response.status_code, body
 
 
 def _error_code(body: dict[str, object]) -> object:
+    """에러 응답의 error.code."""
     error = body["error"]
     assert isinstance(error, dict)
     return error["code"]
@@ -33,6 +35,7 @@ def _error_code(body: dict[str, object]) -> object:
 
 @pytest.mark.feature("F1-7")
 def test_new_user_me_shows_empty_profile_and_needs_onboarding(client: TestClient) -> None:
+    """신규 회원은 빈 프로필과 온보딩 필요를 보여 준다."""
     access = login(client)["access_token"]
 
     response = client.get("/users/me", headers=bearer(access))
@@ -49,6 +52,7 @@ def test_new_user_me_shows_empty_profile_and_needs_onboarding(client: TestClient
 
 @pytest.mark.feature("F1-7")
 def test_me_requires_access_token(client: TestClient) -> None:
+    """내 정보 조회에는 Access Token 이 필요하다."""
     response = client.get("/users/me")
 
     assert response.status_code == 401
@@ -57,6 +61,7 @@ def test_me_requires_access_token(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-7")
 def test_me_after_logout_returns_401(client: TestClient) -> None:
+    """로그아웃한 토큰으로 내 정보를 조회하면 401 이다."""
     access = login(client)["access_token"]
     client.post("/auth/logout", headers=bearer(access))
 
@@ -65,6 +70,7 @@ def test_me_after_logout_returns_401(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-7")
 def test_saving_profile_completes_onboarding(client: TestClient) -> None:
+    """프로필을 저장하면 온보딩이 끝난다."""
     access = login(client)["access_token"]
 
     status, body = _put(client, access)
@@ -81,6 +87,7 @@ def test_saving_profile_completes_onboarding(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-7")
 def test_profile_update_replaces_interest_fields(client: TestClient) -> None:
+    """관심 분야는 중복 없이 통째로 바뀐다."""
     access = login(client)["access_token"]
     _put(client, access, interest_fields=["AI", "보안"])
 
@@ -93,6 +100,7 @@ def test_profile_update_replaces_interest_fields(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-7")
 def test_grade_is_optional(client: TestClient) -> None:
+    """학년은 비워 둘 수 있다."""
     status, body = _put(client, login(client)["access_token"], grade=None, school_type="기타")
 
     assert status == 200
@@ -126,6 +134,7 @@ def test_grade_is_optional(client: TestClient) -> None:
     ],
 )
 def test_invalid_profile_returns_400(client: TestClient, changes: dict[str, object]) -> None:
+    """잘못된 프로필 값은 400 이다."""
     status, body = _put(client, login(client)["access_token"], **changes)
 
     assert status == 400
@@ -135,6 +144,7 @@ def test_invalid_profile_returns_400(client: TestClient, changes: dict[str, obje
 @pytest.mark.feature("F1-7")
 @pytest.mark.parametrize("nickname", ["가나", "가" * 12, "  공백포함 닉  "])
 def test_nickname_length_boundaries_are_accepted(client: TestClient, nickname: str) -> None:
+    """닉네임 길이 경계값은 받아들인다."""
     status, body = _put(client, login(client)["access_token"], nickname=nickname)
 
     assert status == 200
@@ -143,6 +153,7 @@ def test_nickname_length_boundaries_are_accepted(client: TestClient, nickname: s
 
 @pytest.mark.feature("F1-7")
 def test_nickname_taken_by_other_user_returns_409(client: TestClient) -> None:
+    """다른 회원이 쓰는 닉네임은 409 다."""
     _put(client, login(client, "code-a")["access_token"])
 
     status, body = _put(client, login(client, "code-b")["access_token"])
@@ -153,6 +164,7 @@ def test_nickname_taken_by_other_user_returns_409(client: TestClient) -> None:
 
 @pytest.mark.feature("F1-7")
 def test_user_can_keep_own_nickname(client: TestClient) -> None:
+    """내 닉네임을 그대로 두고 다른 값만 바꿀 수 있다."""
     access = login(client)["access_token"]
     _put(client, access)
 
@@ -165,11 +177,13 @@ class SlowCheckRepository(UserRepository):
     """중복 확인은 통과했는데 저장 직전에 다른 회원이 같은 닉네임을 가져간 상황."""
 
     def nickname_taken(self, nickname: str, exclude_user_id: int) -> bool:
+        """중복 검사를 늘 통과시켜 DB 유일 제약까지 가게 한다."""
         return False
 
 
 @pytest.mark.feature("F1-7")
 def test_concurrent_same_nickname_returns_409(client: TestClient, session: Session) -> None:
+    """중복 검사를 지나친 같은 닉네임은 DB 유일 제약으로 409 가 되고 저장이 되돌려진다."""
     login(client, "code-a")
     login(client, "code-b")
     first, second = session.scalars(select(User).order_by(User.id)).all()
@@ -189,4 +203,5 @@ def test_concurrent_same_nickname_returns_409(client: TestClient, session: Sessi
     [("  코딩왕 ", "코딩왕"), ("ab", "ab"), ("한글 닉네임", "한글 닉네임")],
 )
 def test_normalize_nickname_strips_spaces(raw: str, expected: str) -> None:
+    """닉네임 앞뒤 공백을 지운다."""
     assert normalize_nickname(raw) == expected

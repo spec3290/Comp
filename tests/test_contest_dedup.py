@@ -22,6 +22,7 @@ RULES = load_rules()
 
 
 def _contest(source: str, title: str = "2026 AI 해커톤", host: str = "주최사") -> RawContest:
+    """소스만 다르고 나머지는 같은 테스트용 대회를 만든다."""
     return RawContest(
         title=title,
         host=host,
@@ -38,11 +39,15 @@ def _contest(source: str, title: str = "2026 AI 해커톤", host: str = "주최�
 
 
 class FakeSource:
+    """고정된 대회 목록을 돌려주는 가짜 수집 소스."""
+
     def __init__(self, name: str, contests: list[RawContest]) -> None:
+        """소스 이름과 돌려줄 대회 목록을 받는다."""
         self.name = name
         self._contests = contests
 
     def fetch(self) -> list[RawContest]:
+        """받아 둔 대회 목록을 그대로 돌려준다."""
         return self._contests
 
 
@@ -56,6 +61,7 @@ SAME_CONTEST_SOURCES = [
 
 @pytest.fixture
 def repo(mongo_db: Database[Document]) -> ContestRepository:
+    """인덱스를 만든 대회 저장소."""
     repository = ContestRepository(mongo_db)
     repository.ensure_indexes()
     return repository
@@ -65,6 +71,7 @@ def repo(mongo_db: Database[Document]) -> ContestRepository:
 def test_same_contest_from_several_sites_is_stored_once(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
+    """여러 사이트의 같은 대회가 한 문서로 저장되고 출처가 모두 남는다."""
     results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     assert [r.error for r in results] == [None, None, None]
@@ -79,6 +86,7 @@ def test_same_contest_from_several_sites_is_stored_once(
 def test_recollecting_creates_no_duplicates(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
+    """다시 수집해도 문서가 늘지 않는다."""
     collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
@@ -99,6 +107,7 @@ def test_recollecting_creates_no_duplicates(
 def test_contests_differing_in_title_host_or_deadline_are_kept_apart(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
+    """제목·주최·마감일 중 하나라도 다르면 다른 대회로 저장한다."""
     base = _contest("dacon")
     contests = [
         base,
@@ -116,6 +125,7 @@ def test_contests_differing_in_title_host_or_deadline_are_kept_apart(
 def test_merge_key_is_unique_in_database(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
+    """DB 가 병합 키 중복 저장을 막는다."""
     collect(SAME_CONTEST_SOURCES[:1], repo, TODAY, RULES)
     doc = mongo_db[COLLECTION].find_one()
     assert doc is not None

@@ -29,13 +29,18 @@ class NicknameConflictError(Exception):
 
 
 class UserRepository:
+    """PostgreSQL 회원 저장소."""
+
     def __init__(self, session: Session) -> None:
+        """요청 단위 세션을 받는다."""
         self._session = session
 
     def get(self, user_id: int) -> User | None:
+        """ID 로 회원을 찾는다."""
         return self._session.get(User, user_id)
 
     def get_by_provider(self, provider: str, provider_id: str) -> User | None:
+        """제공자와 제공자 측 ID 로 회원을 찾는다."""
         stmt = select(User).where(User.provider == provider, User.provider_id == provider_id)
         return self._session.scalars(stmt).one_or_none()
 
@@ -61,6 +66,7 @@ class UserRepository:
         return user, True
 
     def nickname_taken(self, nickname: str, exclude_user_id: int) -> bool:
+        """다른 회원이 이미 쓰는 닉네임인지 확인한다."""
         stmt = select(User.id).where(User.nickname == nickname, User.id != exclude_user_id)
         return self._session.scalars(stmt).first() is not None
 
@@ -91,34 +97,44 @@ class UserRepository:
 
 
 def _refresh_key(jti: str) -> str:
+    """Refresh Token 레코드의 Redis 키."""
     return f"refresh:{jti}"
 
 
 def _family_key(family_id: str) -> str:
+    """로그인 세션(family)에 속한 토큰 목록의 Redis 키."""
     return f"refresh_family:{family_id}"
 
 
 def _blacklist_key(jti: str) -> str:
+    """로그아웃된 Access Token 의 Redis 키."""
     return f"blacklist:{jti}"
 
 
 def _revoked_key(family_id: str) -> str:
+    """폐기된 family 표식의 Redis 키."""
     return f"refresh_family_revoked:{family_id}"
 
 
 def _login_code_key(code: str) -> str:
+    """일회용 로그인 코드의 Redis 키."""
     return f"login_code:{code}"
 
 
 @dataclass(frozen=True)
 class RefreshRecord:
+    """Refresh Token 을 소비한 결과."""
+
     user_id: int
     family_id: str
     reused: bool  # 이미 회전된 토큰이 다시 왔다 (탈취 의심)
 
 
 class TokenStore:
+    """Redis 에 Refresh Token·family·블랙리스트를 저장한다."""
+
     def __init__(self, redis: Redis) -> None:
+        """Redis 클라이언트를 받는다."""
         self._redis = redis
 
     def save(self, jti: str, user_id: int, family_id: str, ttl: timedelta) -> bool:
@@ -131,6 +147,7 @@ class TokenStore:
         saved: list[bool] = []
 
         def write(pipe: Pipeline) -> None:
+            """family 가 폐기되지 않았을 때만 토큰을 저장하는 트랜잭션 본문."""
             saved.clear()  # WATCH 충돌로 다시 불릴 수 있다
             if pipe.exists(revoked):
                 saved.append(False)
@@ -155,6 +172,7 @@ class TokenStore:
         found: list[RefreshRecord] = []
 
         def mark_rotated(pipe: Pipeline) -> None:
+            """토큰을 읽고 회전됨으로 표시하는 트랜잭션 본문."""
             found.clear()  # WATCH 충돌로 다시 불릴 수 있다
             stored = pipe.hgetall(key)
             if not stored:
@@ -206,9 +224,11 @@ class LoginCodeStore:
     """콜백에서 프론트로 넘기는 일회용 로그인 코드 (Q-16). 코드 하나는 회원 하나를 가리킨다."""
 
     def __init__(self, redis: Redis) -> None:
+        """Redis 클라이언트를 받는다."""
         self._redis = redis
 
     def save(self, code: str, user_id: int, ttl: timedelta) -> None:
+        """로그인 코드를 회원 ID 와 묶어 TTL 동안 저장한다."""
         self._redis.set(_login_code_key(code), str(user_id), ex=ttl)
 
     def consume(self, code: str) -> int | None:

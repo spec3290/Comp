@@ -30,6 +30,7 @@ Users = Annotated[UserService, Depends(get_user_service)]
 
 @router.get("/{provider}/login", status_code=302, response_class=RedirectResponse)
 def login(provider: str, service: Service) -> RedirectResponse:
+    """state 쿠키를 심고 제공자 로그인 페이지로 보낸다."""
     start = service.start_login(provider)
     response = RedirectResponse(start.redirect_url, status_code=302)
     response.set_cookie(
@@ -94,6 +95,7 @@ def logout(token: CurrentToken, service: Service) -> Response:
 
 @users_router.get("/me", response_model=UserOut)
 def me(token: CurrentToken, users: Users) -> UserOut:
+    """로그인한 회원의 정보를 돌려준다."""
     return UserOut.from_user(users.get_me(token.user_id))
 
 

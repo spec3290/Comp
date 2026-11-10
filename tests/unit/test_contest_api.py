@@ -21,6 +21,7 @@ def _record(
     apply_end: date,
     tags: EligibilityTags = NO_TAGS,
 ) -> ContestRecord:
+    """접수 기간·태그만 다른 테스트용 대회."""
     return ContestRecord(
         id=contest_id,
         title=f"대회 {contest_id}",
@@ -39,21 +40,27 @@ def _record(
 
 
 class FakeRepository(ContestRepository):
+    """고정 목록을 돌려주고 받은 조건을 기록하는 가짜 대회 저장소."""
+
     def __init__(self, records: list[ContestRecord], total: int | None = None) -> None:
+        """돌려줄 목록과 전체 건수를 받는다."""
         self.records = records
         self.total = len(records) if total is None else total
         self.queries: list[ContestQuery] = []
 
     def find(self, query: ContestQuery, today: date) -> tuple[list[ContestRecord], int]:
+        """받은 조건을 기록하고 고정 목록을 돌려준다."""
         self.queries.append(query)
         return self.records, self.total
 
     def get(self, contest_id: str) -> ContestRecord | None:
+        """ID 로 대회를 찾는다."""
         return next((r for r in self.records if r.id == contest_id), None)
 
 
 @pytest.fixture
 def repo() -> FakeRepository:
+    """상태가 다른 대회들을 담은 가짜 저장소."""
     return FakeRepository(
         [
             _record(
@@ -71,6 +78,7 @@ def repo() -> FakeRepository:
 
 @pytest.fixture
 def client(repo: FakeRepository) -> Iterator[TestClient]:
+    """조회 서비스와 날짜를 고정한 API 클라이언트."""
     app.dependency_overrides[get_query_service] = lambda: ContestQueryService(repo)
     app.dependency_overrides[today_kst] = lambda: TODAY
     yield TestClient(app)
@@ -81,6 +89,7 @@ def client(repo: FakeRepository) -> Iterator[TestClient]:
 def test_list_defaults_to_20_per_page_excluding_closed(
     client: TestClient, repo: FakeRepository
 ) -> None:
+    """기본 목록은 20개씩이고 마감 대회를 뺀다."""
     res = client.get("/contests")
 
     assert res.status_code == 200
@@ -93,6 +102,7 @@ def test_list_defaults_to_20_per_page_excluding_closed(
 
 @pytest.mark.feature("F2-3")
 def test_list_computes_status_and_d_day(client: TestClient) -> None:
+    """목록은 상태와 D-day 를 날짜로 계산해 보여 준다."""
     items = {item["id"]: item for item in client.get("/contests").json()["items"]}
 
     assert (items["a"]["status"], items["a"]["d_day"]) == ("open", 7)
@@ -106,6 +116,7 @@ def test_list_computes_status_and_d_day(client: TestClient) -> None:
 def test_list_parses_filters_search_sort_and_paging(
     client: TestClient, repo: FakeRepository
 ) -> None:
+    """필터·검색·정렬·페이지 파라미터를 조회 조건으로 바꾼다."""
     res = client.get(
         "/contests",
         params={
@@ -144,6 +155,7 @@ def test_list_parses_filters_search_sort_and_paging(
 def test_list_rejects_invalid_params_with_400(
     client: TestClient, params: dict[str, str | int]
 ) -> None:
+    """잘못된 파라미터는 단일 포맷 400 이다."""
     res = client.get("/contests", params=params)
 
     assert res.status_code == 400
@@ -152,6 +164,7 @@ def test_list_rejects_invalid_params_with_400(
 
 @pytest.mark.feature("F2-4")
 def test_detail_returns_eligibility_sources_and_d_day(client: TestClient) -> None:
+    """상세는 자격 원문·출처·D-day 를 돌려준다."""
     res = client.get("/contests/a")
 
     assert res.status_code == 200
@@ -163,6 +176,7 @@ def test_detail_returns_eligibility_sources_and_d_day(client: TestClient) -> Non
 
 @pytest.mark.feature("F2-4")
 def test_detail_unknown_id_returns_404(client: TestClient) -> None:
+    """없는 대회 상세는 404 다."""
     res = client.get("/contests/nope")
 
     assert res.status_code == 404
@@ -171,6 +185,7 @@ def test_detail_unknown_id_returns_404(client: TestClient) -> None:
 
 @pytest.mark.feature("F3-3")
 def test_list_parses_eligibility_filters(client: TestClient, repo: FakeRepository) -> None:
+    """자격 필터 파라미터를 조회 조건으로 바꾼다."""
     res = client.get(
         "/contests",
         params={"education": "대학생, 제한 없음", "team_type": "팀", "region": "서울,전국"},
@@ -186,6 +201,7 @@ def test_list_parses_eligibility_filters(client: TestClient, repo: FakeRepositor
 
 @pytest.mark.feature("F3-3")
 def test_list_marks_contests_matched_only_as_unclassified(client: TestClient) -> None:
+    """미분류라서 걸린 대회에는 자격 확인 필요를 표시한다."""
     res = client.get("/contests", params={"education": "대학생"})
 
     items = {item["id"]: item for item in res.json()["items"]}
@@ -195,6 +211,7 @@ def test_list_marks_contests_matched_only_as_unclassified(client: TestClient) ->
 
 @pytest.mark.feature("F2-4")
 def test_detail_returns_classified_tags_in_vocabulary_order(client: TestClient) -> None:
+    """상세는 자격 태그를 어휘 순서로 돌려준다."""
     body = client.get("/contests/a").json()
 
     assert body["eligibility_tags"] == {"education": ["대학생"], "team_type": ["팀"], "region": []}

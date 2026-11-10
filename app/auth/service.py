@@ -51,11 +51,15 @@ logger = logging.getLogger(__name__)
 
 
 class OAuthStateMismatchError(AppError):
+    """콜백의 state 가 쿠키와 다를 때 (400)."""
+
     status_code = 400
     code = "OAUTH_STATE_MISMATCH"
 
 
 class LoginCodeInvalidError(AppError):
+    """로그인 코드가 없거나 만료됐을 때 (401)."""
+
     status_code = 401
     code = "LOGIN_CODE_INVALID"
 
@@ -66,12 +70,16 @@ LOGIN_CODE_TTL = timedelta(seconds=60)  # 프론트가 리다이렉트를 받고
 
 
 class NicknameTakenError(AppError):
+    """다른 회원이 쓰는 닉네임일 때 (409)."""
+
     status_code = 409
     code = "NICKNAME_TAKEN"
 
 
 @dataclass(frozen=True)
 class LoginStart:
+    """로그인 시작에 필요한 리다이렉트 주소와 state."""
+
     redirect_url: str
     state: str
     secure_cookie: bool
@@ -79,11 +87,15 @@ class LoginStart:
 
 @dataclass(frozen=True)
 class LoginResult:
+    """로그인으로 발급한 토큰과 온보딩 필요 여부."""
+
     tokens: IssuedTokens
     needs_onboarding: bool
 
 
 class AuthService:
+    """소셜 로그인·토큰 재발급·로그아웃 유스케이스."""
+
     def __init__(
         self,
         providers: Mapping[str, OAuthProvider],
@@ -92,6 +104,7 @@ class AuthService:
         login_codes: LoginCodeStore,
         frontend_url: str,
     ) -> None:
+        """제공자·저장소·토큰 발급기를 주입받는다."""
         self._providers = providers
         self._users = users
         self._issuer = issuer
@@ -99,6 +112,7 @@ class AuthService:
         self._frontend_url = frontend_url
 
     def start_login(self, provider_name: str) -> LoginStart:
+        """state 를 만들고 제공자 로그인 주소를 돌려준다."""
         provider = self._provider(provider_name)
         state = secrets.token_urlsafe(32)
         return LoginStart(
@@ -154,31 +168,39 @@ class AuthService:
         return LoginResult(tokens=tokens, needs_onboarding=user.needs_onboarding)
 
     def refresh(self, refresh_token: str) -> IssuedTokens:
+        """Refresh Token 을 회전하고 새 토큰 쌍을 발급한다."""
         record = self._issuer.rotate(refresh_token)
         if self._users.get(record.user_id) is None:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 탈퇴한 회원 (F1-8)
         return self._issuer.issue(record.user_id, now_kst(), family_id=record.family_id)
 
     def logout(self, access: TokenClaims) -> None:
+        """현재 로그인 세션의 토큰을 모두 폐기한다."""
         self._issuer.revoke_session(access, now_kst())
         logger.info("로그아웃: user_id=%d", access.user_id)
 
     def _provider(self, name: str) -> OAuthProvider:
+        """이름으로 설정된 제공자를 찾고 없으면 404."""
         provider = self._providers.get(name)
         if provider is None:
             raise NotFoundError(f"지원하지 않거나 설정되지 않은 로그인 제공자입니다: {name}")
         return provider
 
     def _frontend_url_with(self, **params: str) -> str:
+        """프론트 주소에 쿼리 파라미터를 붙인다."""
         separator = "&" if "?" in self._frontend_url else "?"
         return f"{self._frontend_url}{separator}{urlencode(params)}"
 
 
 class UserService:
+    """회원 정보 조회·프로필 수정 유스케이스."""
+
     def __init__(self, users: UserRepository) -> None:
+        """회원 저장소를 받는다."""
         self._users = users
 
     def get_me(self, user_id: int) -> User:
+        """회원을 찾고 탈퇴했으면 401."""
         user = self._users.get(user_id)
         if user is None:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 토큰은 맞지만 탈퇴한 회원 (F1-8)
@@ -209,6 +231,7 @@ def get_http_client() -> httpx.Client:
 
 
 def close_http_client() -> None:
+    """만들어 둔 공유 HTTP 클라이언트가 있으면 닫는다."""
     if get_http_client.cache_info().currsize:
         get_http_client().close()
         get_http_client.cache_clear()
@@ -245,6 +268,7 @@ Issuer = Annotated[TokenIssuer, Depends(get_token_issuer)]
 def get_auth_service(
     session: Annotated[Session, Depends(get_session)], issuer: Issuer
 ) -> AuthService:
+    """요청마다 AuthService 를 조립한다."""
     settings = get_settings()
     return AuthService(
         providers=build_providers(settings, get_http_client()),
@@ -256,6 +280,7 @@ def get_auth_service(
 
 
 def get_user_service(session: Annotated[Session, Depends(get_session)]) -> UserService:
+    """요청마다 UserService 를 조립한다."""
     return UserService(UserRepository(session))
 
 

@@ -12,6 +12,7 @@ from app.core.db import get_settings
 
 @lru_cache
 def get_redis() -> Redis:
+    """Refresh Token 저장용 Redis 클라이언트를 만든다 (캐시)."""
     # Redis 가 응답하지 않을 때 요청 스레드가 무한정 묶이지 않게 한다
     return Redis.from_url(
         get_settings().redis_url,
@@ -22,6 +23,7 @@ def get_redis() -> Redis:
 
 
 def close_redis() -> None:
+    """만들어 둔 Redis 클라이언트가 있으면 닫고 캐시를 비운다."""
     if get_redis.cache_info().currsize:
         get_redis().close()
         get_redis.cache_clear()
