@@ -4,7 +4,7 @@
 
 ## 프로젝트
 
-여러 사이트에 흩어진 대회를 수집·중복 제거·자격 분류해 보여 주는 백엔드.
+여러 사이트에 흩어진 대회를 수집·중복 제거·분야·형식 분류해 보여 주는 백엔드.
 스택: Python 3.13+, uv, FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL(메인 DB), MongoDB·pymongo(대회 데이터·벡터), Redis·redis-py(Refresh Token), PyJWT, httpx, pytest. 저장소 분담은 [ADR-0008](docs/decisions.md).
 현재 범위는 **1차 MVP 13개 기능**이다. 2차 이후는 구현하지 않는다.
 
@@ -42,7 +42,7 @@ app/
 migrations/          # Alembic (PostgreSQL 스키마)
 ```
 
-- 기능 안의 호출 방향은 `router → service → repository`. 순수 도메인 규칙(상태·D-day·중복 제거·자격 분류)은 `rules.py`에 둔다.
+- 기능 안의 호출 방향은 `router → service → repository`. 순수 도메인 규칙(상태·D-day·중복 제거·분야·형식 분류)은 `rules.py`에 둔다.
 - Protocol은 구현체가 여러 개인 경계에만 쓴다: 크롤러(`contests/crawlers/base.py`의 `ContestSource`), OAuth(`auth/oauth.py`의 `OAuthProvider`).
 - 계약의 실체는 `pyproject.toml`의 `[tool.importlinter]`이며 CI가 검사한다.
 
