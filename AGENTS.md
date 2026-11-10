@@ -17,6 +17,7 @@
 | 결정 내역 | [docs/decisions.md](docs/decisions.md) | 확정 결정(ADR), API·데이터 모델 규약, 결정이 필요한 항목(Q-번호) |
 | 스킬 | `.claude/skills/` | `feature-implementation`, `git-workflow`, `code-review` |
 | 소스 | `app/`, `tests/` | 아래 아키텍처 제약을 따른다 |
+| 리뷰 기록 | `st/` | 작업마다 남기는 코드 리뷰 문서 (아래 하드 규칙) |
 | 검증 | `.github/workflows/ci.yml` | 린트·타입·아키텍처·테스트·Git 규약을 CI가 검증 ([ADR-0006](docs/decisions.md)) |
 
 ## 조정 규칙
@@ -76,3 +77,5 @@ PR을 올리면 `.github/workflows/ci.yml`이 다음을 검증한다. 통과 기
 - 에러 응답은 [ADR-0004](docs/decisions.md)의 단일 포맷을 따른다. 만료·위조 토큰은 항상 401.
 - 크롤링 실패는 기존 데이터를 건드리지 않고 로그만 남긴다 (F2-1).
 - 기능 테스트에는 `@pytest.mark.feature("F?-?")`로 기능 ID를 단다.
+- **모든 코드에 간단한 설명 주석을 단다.** 새로 쓰거나 고친 모듈·클래스·함수(테스트·내부 함수 포함)마다 무엇을 하는지 한 줄 docstring을 쓴다. 한국어로, `어떻게`보다 `무엇을`·`왜`를 쓰고, 코드를 그대로 읽어 주는 설명은 쓰지 않는다. 한 줄로 부족한 규칙·결정 근거(Q-번호, ADR)만 줄을 늘린다.
+- **작업이 끝나면 `st/`에 코드 리뷰를 md로 남긴다.** 파일명은 `st/YYYY-MM-DD_{todo}.md`(`{todo}`는 브랜치 슬러그와 같게), 내용은 [code-review](.claude/skills/code-review/SKILL.md) 스킬의 출력 형식을 따르고 실행한 검사 명령과 결과를 적는다. 리뷰 문서는 그 작업의 커밋에 같이 넣는다.
