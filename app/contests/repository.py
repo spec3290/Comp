@@ -50,6 +50,15 @@ class SaveOutcome(StrEnum):
 
 
 @dataclass(frozen=True)
+class ContestOrigin:
+    """대회를 수집한 사이트 하나와 그 사이트의 원문 링크. 대표 소스(Q-2)가 값을 정한다."""
+
+    source: str
+    source_url: str
+    representative: bool
+
+
+@dataclass(frozen=True)
 class ContestRecord:
     """MongoDB 에서 읽은 대회 한 건."""
 
@@ -63,7 +72,8 @@ class ContestRecord:
     event_end: date | None
     apply_url: str
     source_url: str
-    sources: tuple[str, ...]
+    sources: tuple[ContestOrigin, ...]
+    updated_at: datetime  # 대표 소스가 마지막으로 값을 쓴 시각 (Q-29)
     tags: ContestTags = NO_TAGS
 
 
@@ -166,7 +176,15 @@ def _to_record(doc: Document) -> ContestRecord:
         event_end=_to_date(doc.get("event_end")),
         apply_url=doc["apply_url"],
         source_url=doc["source_url"],
-        sources=tuple(s["source"] for s in doc.get("sources", [])),
+        sources=tuple(
+            ContestOrigin(
+                source=s["source"],
+                source_url=s["source_url"],
+                representative=s["source"] == doc["source"],
+            )
+            for s in doc.get("sources", [])
+        ),
+        updated_at=doc["updated_at"],
         tags=_to_tags(doc.get("tags", {})),
     )
 
@@ -342,3 +360,7 @@ class BookmarkRepository:
             .order_by(Bookmark.created_at.desc(), Bookmark.contest_id)
         )
         return [BookmarkRecord(contest_id=r.contest_id, created_at=r.created_at) for r in rows]
+
+    def exists(self, user_id: int, contest_id: str) -> bool:
+        """회원이 이 대회를 저장했는지 본다."""
+        return self._session.get(Bookmark, (user_id, contest_id)) is not None

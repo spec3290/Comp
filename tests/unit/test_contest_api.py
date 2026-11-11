@@ -13,16 +13,27 @@ from sqlalchemy.orm import Session
 from app.auth.repository import UserRepository
 from app.auth.service import UserService, get_token_issuer, get_user_service
 from app.auth.tokens import TokenIssuer
-from app.contests.repository import ContestRecord, ContestRepository
+from app.contests.repository import (
+    BookmarkRepository,
+    ContestOrigin,
+    ContestRecord,
+    ContestRepository,
+)
 from app.contests.router import today_kst
 from app.contests.rules import NO_TAGS, ContestQuery, ContestStatus, ContestTags, SortOrder
-from app.contests.service import ContestQueryService, get_query_service
+from app.contests.service import (
+    BookmarkService,
+    ContestQueryService,
+    get_bookmark_service,
+    get_query_service,
+)
 from app.core.time import KST, now_kst
 from app.main import app
 from tests.unit.auth_support import bearer
 
 TODAY = date(2026, 10, 23)
 NOW = datetime(2026, 10, 23, 9, 0, tzinfo=KST)
+UPDATED_AT = datetime(2026, 10, 22, 6, 0, tzinfo=KST)
 
 
 def _record(
@@ -43,7 +54,11 @@ def _record(
         event_end=None,
         apply_url="https://example.com/apply",
         source_url="https://example.com",
-        sources=("dacon", "linkareer"),
+        sources=(
+            ContestOrigin("dacon", "https://dacon.io/c/1", representative=True),
+            ContestOrigin("linkareer", "https://linkareer.com/c/1", representative=False),
+        ),
+        updated_at=UPDATED_AT,
         tags=tags,
     )
 
@@ -92,6 +107,9 @@ def client(repo: FakeRepository, session: Session, issuer: TokenIssuer) -> Itera
     app.dependency_overrides[today_kst] = lambda: TODAY
     app.dependency_overrides[get_token_issuer] = lambda: issuer
     app.dependency_overrides[get_user_service] = lambda: UserService(UserRepository(session))
+    app.dependency_overrides[get_bookmark_service] = lambda: BookmarkService(
+        BookmarkRepository(session), repo
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -132,7 +150,7 @@ def test_list_computes_status_and_d_day(client: TestClient) -> None:
     assert (items["b"]["status"], items["b"]["d_day"]) == ("upcoming", 38)
     # 시작일이 없으면 접수 중, 마감 당일은 D-0 (Q-6)
     assert (items["c"]["status"], items["c"]["d_day"]) == ("open", 0)
-    assert "sources" not in items["a"]
+    assert {"sources", "updated_at", "bookmarked"}.isdisjoint(items["a"])
 
 
 @pytest.mark.feature("F2-3")
@@ -186,15 +204,43 @@ def test_list_rejects_invalid_params_with_400(
 
 
 @pytest.mark.feature("F2-4")
-def test_detail_returns_sources_and_d_day(client: TestClient) -> None:
-    """상세는 출처·D-day 를 돌려주고 참가 자격 원문은 없다 (Q-23)."""
+def test_detail_returns_source_links_updated_at_and_d_day(client: TestClient) -> None:
+    """상세는 사이트별 원문 링크·갱신 시각·D-day 를 돌려주고 내부 값은 숨긴다 (Q-29)."""
     res = client.get("/contests/a")
 
     assert res.status_code == 200
     body = res.json()
-    assert "eligibility_text" not in body
-    assert body["sources"] == ["dacon", "linkareer"]
+    assert body["sources"] == [
+        {"source": "dacon", "source_url": "https://dacon.io/c/1", "is_representative": True},
+        {
+            "source": "linkareer",
+            "source_url": "https://linkareer.com/c/1",
+            "is_representative": False,
+        },
+    ]
+    assert body["updated_at"] == "2026-10-22T06:00:00+09:00"
     assert (body["status"], body["d_day"]) == ("open", 7)
+    assert {"eligibility_text", "created_at", "merge_key"}.isdisjoint(body)
+
+
+@pytest.mark.feature("F2-4")
+def test_detail_without_login_has_null_bookmarked(client: TestClient) -> None:
+    """비로그인 상세의 저장 여부는 알 수 없어 null 이다 (Q-29)."""
+    assert client.get("/contests/a").json()["bookmarked"] is None
+
+
+@pytest.mark.feature("F2-4")
+def test_detail_shows_whether_member_bookmarked(
+    client: TestClient, session: Session, issuer: TokenIssuer
+) -> None:
+    """로그인 상세는 내가 저장한 대회인지 알려 준다. 다른 회원의 저장은 섞이지 않는다."""
+    mine = _member(session, issuer, "a", [])
+    other = _member(session, issuer, "b", [])
+    client.put("/contests/a/bookmark", headers=other)
+    client.put("/contests/b/bookmark", headers=mine)
+
+    assert client.get("/contests/a", headers=mine).json()["bookmarked"] is False
+    assert client.get("/contests/b", headers=mine).json()["bookmarked"] is True
 
 
 @pytest.mark.feature("F2-4")

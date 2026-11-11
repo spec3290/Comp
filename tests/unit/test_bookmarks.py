@@ -13,7 +13,12 @@ from app.auth.dependencies import get_current_user_id
 from app.auth.service import get_token_issuer
 from app.auth.tokens import TokenIssuer
 from app.contests.models import Bookmark
-from app.contests.repository import BookmarkRepository, ContestRecord, ContestRepository
+from app.contests.repository import (
+    BookmarkRepository,
+    ContestOrigin,
+    ContestRecord,
+    ContestRepository,
+)
 from app.contests.router import today_kst
 from app.contests.service import BookmarkService, get_bookmark_service
 from app.core.sql import Base
@@ -39,7 +44,8 @@ def _record(contest_id: str, apply_start: date | None, apply_end: date) -> Conte
         event_end=None,
         apply_url="https://example.com/apply",
         source_url="https://example.com",
-        sources=("dacon",),
+        sources=(ContestOrigin("dacon", "https://example.com", representative=True),),
+        updated_at=NOW,
     )
 
 

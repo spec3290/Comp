@@ -13,7 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.auth.dependencies import CurrentUserId, OptionalUserId, get_optional_user_id
+from app.auth.dependencies import CurrentUserId, OptionalUserId
 from app.auth.service import UserService, get_user_service
 from app.auth.tokens import TokenInvalidError
 from app.contests.rules import (
@@ -124,14 +124,13 @@ def list_contests(
     return ContestPageOut.from_page(service.list_contests(query, today))
 
 
-@router.get(
-    "/{contest_id}",
-    response_model=ContestDetailOut,
-    dependencies=[Depends(get_optional_user_id)],  # 보낸 토큰이 만료·위조면 401 (ADR-0004)
-)
-def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetailOut:
-    """대회 상세를 돌려준다."""
-    return ContestDetailOut.from_view(service.get_contest(contest_id, today))
+@router.get("/{contest_id}", response_model=ContestDetailOut)
+def get_contest(
+    contest_id: str, service: Service, bookmarks: Bookmarks, today: Today, user_id: OptionalUserId
+) -> ContestDetailOut:
+    """대회 상세와 로그인 회원의 저장 여부를 돌려준다. 보낸 토큰이 만료·위조면 401 (ADR-0004)."""
+    view = service.get_contest(contest_id, today)
+    return ContestDetailOut.from_detail(view, bookmarks.is_bookmarked(user_id, contest_id))
 
 
 @router.put("/{contest_id}/bookmark", status_code=status.HTTP_204_NO_CONTENT)
