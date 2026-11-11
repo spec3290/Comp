@@ -55,7 +55,11 @@ def test_code4korea_keeps_contests_and_uses_event_date_as_deadline() -> None:
 
     contests = _source(text).fetch()
 
-    assert [c.title for c in contests] == ["2026 K-조선 해커톤", "구름톤 아레나"]
+    assert [c.title for c in contests] == [
+        "2026 K-조선 해커톤",
+        "구름톤 아레나",
+        "홈페이지 없는 해커톤",
+    ]
     contest = contests[0]
     assert contest.field == "조선, AI, 해커톤"
     assert contest.apply_start is None
@@ -64,6 +68,8 @@ def test_code4korea_keeps_contests_and_uses_event_date_as_deadline() -> None:
     assert contest.apply_url == "https://a.kr/1"
     # 시트처럼 scheme 이 빠진 주소에는 https 를 붙인다
     assert contests[1].apply_url == "https://c.kr/x"
+    # 홈페이지가 없으면 링크 없이 남기고 프론트가 직접 검색 안내를 띄운다 (Q-29)
+    assert contests[2].apply_url is None
 
 
 @pytest.mark.feature("F2-1")

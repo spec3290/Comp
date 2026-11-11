@@ -1,10 +1,12 @@
-"""대회 수집 (F2-1) + 중복 제거 (F2-2) + 분류 (F3-1) + 조회 (F2-3, F2-4, F3-3) + 저장 (F2-7).
+"""대회 수집 (F2-1) + 중복 제거 (F2-2) + 분류 (F3-1) + 조회 (F2-3, F2-4, F3-3) + 바로가기 (F2-5)
++ 저장 (F2-7).
 
 수집: 소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만
 남기며, 다른 소스는 계속 진행한다. 저장하기 전에 소스 태그·제목으로 분야·형식 태그를 붙인다.
 마감 3일이 지난 대회는 지운다 (Q-3).
 조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다. 태그 필터에 미분류로
 걸린 대회는 '분류 확인 필요'로 표시한다.
+바로가기: 클릭을 기록하고 참가 링크를 돌려준다. 마감됐거나 링크가 없는 대회는 거절한다 (Q-29).
 저장: 마감된 대회는 새로 저장할 수 없다 (Q-18). 목록에서는 삭제된 대회를 건너뛴다.
 """
 
@@ -23,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.contests.crawlers.base import ContestSource
 from app.contests.repository import (
     BookmarkRepository,
+    ClickRepository,
     ContestRecord,
     ContestRepository,
     SaveOutcome,
@@ -41,7 +44,7 @@ from app.contests.rules import (
     split_source_tags,
 )
 from app.core.db import get_database
-from app.core.errors import ContestClosedError, NotFoundError
+from app.core.errors import ApplyUrlMissingError, ContestClosedError, NotFoundError
 from app.core.sql import get_session
 from app.core.time import now_kst
 
@@ -162,6 +165,34 @@ class ContestQueryService:
 def get_query_service() -> ContestQueryService:
     """요청마다 조회 서비스를 조립한다."""
     return ContestQueryService(ContestRepository(get_database()))
+
+
+class ApplyService:
+    """참가 바로가기 유스케이스 (F2-5)."""
+
+    def __init__(self, clicks: ClickRepository, contests: ContestRepository) -> None:
+        """클릭·대회 저장소를 받는다."""
+        self._clicks = clicks
+        self._contests = contests
+
+    def click(self, contest_id: str, user_id: int | None, today: date, now: datetime) -> str:
+        """클릭을 남기고 공식 참가 URL 을 돌려준다. 없으면 404, 마감·링크 없음은 409."""
+        record = self._contests.get(contest_id)
+        if record is None:
+            raise NotFoundError("대회를 찾을 수 없습니다.")
+        if _view(record, today).status is ContestStatus.CLOSED:
+            raise ContestClosedError("접수가 마감된 대회입니다.")
+        if record.apply_url is None:
+            raise ApplyUrlMissingError(
+                "참가 링크를 찾지 못했습니다. 대회 이름으로 직접 검색해 주세요."
+            )
+        self._clicks.add(contest_id, user_id, now)
+        return record.apply_url
+
+
+def get_apply_service(session: Annotated[Session, Depends(get_session)]) -> ApplyService:
+    """요청마다 바로가기 서비스를 조립한다."""
+    return ApplyService(ClickRepository(session), ContestRepository(get_database()))
 
 
 @dataclass(frozen=True)

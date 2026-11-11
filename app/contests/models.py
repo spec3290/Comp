@@ -24,3 +24,18 @@ class Bookmark(Base):
     )
     contest_id: Mapped[str] = mapped_column(String(24), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime())
+
+
+class ContestClick(Base):
+    """참가 바로가기 클릭 한 건 (F2-5). 클릭 수는 행을 세어 집계한다.
+
+    비로그인 클릭은 `user_id` 가 NULL 이다. `contest_id` 는 MongoDB `_id` 를 참조만 한다.
+    """
+
+    __tablename__ = "contest_clicks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contest_id: Mapped[str] = mapped_column(String(24), index=True)
+    # 탈퇴(F1-8)하면 그 회원의 클릭도 지워진다
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    clicked_at: Mapped[datetime] = mapped_column(AwareDateTime())

@@ -31,7 +31,7 @@ class RawContest:
     apply_end: date
     event_start: date | None
     event_end: date | None
-    apply_url: str
+    apply_url: str | None  # 공식 참가 URL. 못 찾으면 None 이고 대회는 그대로 수집한다 (Q-29)
     source: str
     source_url: str
 

@@ -3,7 +3,8 @@
 서버가 결과를 페이지에 실어 주는 것은 검색어만 준 첫 페이지(12건)뿐이다. 유형·분야 필터나
 다음 페이지는 브라우저가 따로 검색 API 를 부르는데, 그 API 는 직접 호출하면 401 이라 쓰지 않는다.
 그래서 대회성 검색어 여러 개로 첫 페이지씩 모으고 유형('대회/공모전')·분야('IT/프로그래밍')는
-여기서 거른다. 시각은 UTC(`Z`)라 KST 날짜로 옮긴다.
+여기서 거른다. 시각은 UTC(`Z`)라 KST 날짜로 옮긴다. 공식 참가 URL 을 못 찾은 행사도
+링크 없이 수집한다 (Q-29).
 """
 
 from __future__ import annotations
@@ -83,14 +84,12 @@ class EventUsSource:
         return list(found.values())
 
     def _to_contest(self, item: dict[str, Any]) -> RawContest | None:
-        """행사 한 건을 RawContest 로 바꾼다. 공식 참가 URL 을 못 찾으면 None (Q-20)."""
+        """IT 대회 한 건을 RawContest 로 바꾸고, 대회가 아니면 None."""
         # 필터도 convert_each 의 항목별 오류 격리 안에서 돌려 깨진 항목 하나가 소스를 막지 않게 한다
         if not _is_it_contest(item):
             return None
         page_url = EVENT_URL.format(subdomain=item["subdomain"], event_id=item["id"])
         apply_url = self._apply_url(item["reception_type"], page_url)
-        if apply_url is None:
-            return None
         start = item.get("register_start_date")
         # 접수 마감이 없으면 행사 시작일을 접수 마감으로 본다 (Q-14와 같은 방식)
         due = item.get("register_due_date") or item["start_date"]
@@ -108,7 +107,11 @@ class EventUsSource:
         )
 
     def _apply_url(self, reception: str, page_url: str) -> str | None:
-        """접수 방식에 맞는 공식 참가 URL. 외부 접수면 상세 페이지의 신청 링크를 읽는다."""
+        """접수 방식에 맞는 공식 참가 URL. 외부 접수면 상세 페이지의 신청 링크를 읽는다.
+
+        못 찾으면 None 이다 (Q-29). 상세 페이지 오류도 None 이지만, 저장소가 링크 없는 값으로
+        이미 저장된 링크를 지우지 않으므로 기존 데이터는 그대로다 (F2-1).
+        """
         if reception == RECEPTION_EVENTUS:
             return page_url
         if reception != RECEPTION_EXTERNAL:
@@ -117,13 +120,13 @@ class EventUsSource:
             res = self._client.get(page_url)
             res.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.warning("%s: 상세 페이지를 못 읽어 건너뜀 (%s, %s)", NAME, page_url, exc)
+            logger.warning("%s: 상세 페이지를 못 읽어 링크 없이 수집 (%s, %s)", NAME, page_url, exc)
             return None
         finally:
             time.sleep(self._delay)
         url = parse_external_apply_url(res.text)
         if url is None:
-            logger.info("%s: 외부 신청 링크가 없어 건너뜀 (%s)", NAME, page_url)
+            logger.info("%s: 외부 신청 링크가 없어 링크 없이 수집 (%s)", NAME, page_url)
         return url
 
 
