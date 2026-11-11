@@ -1,8 +1,9 @@
-"""대회 저장소 (MongoDB `contests` 컬렉션) + 북마크 저장소 (PostgreSQL `bookmarks`, ADR-0008).
+"""대회 저장소 (MongoDB `contests`) + 북마크·클릭 저장소 (PostgreSQL, ADR-0008).
 
 문서 하나가 병합된 대회 하나다. 날짜는 KST 자정 tz-aware datetime 으로 저장한다
 (BSON 에 날짜 전용 타입이 없다). 수집 출처는 `sources` 배열에 쌓고, 처음 수집한 소스가
-대표(`source`)가 되어 값을 갱신한다 (Q-2 기본값).
+대표(`source`)가 되어 값을 갱신한다 (Q-2 기본값). 참가 링크(`apply_url`)는 예외로, 못 찾은
+수집(None)이 저장된 링크를 지우지 않고 대표 소스에 링크가 없으면 다른 소스의 링크로 채운다 (Q-29).
 
 동시에 여러 수집이 같은 대회를 저장해도 문서·출처가 겹치지 않게, 갱신은 '확인 후 쓰기'
 대신 조건을 건 단일 연산과 merge_key UNIQUE 인덱스에 맡긴다.
@@ -26,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.contests.crawlers.base import RawContest
-from app.contests.models import Bookmark
+from app.contests.models import Bookmark, ContestClick
 from app.contests.rules import (
     NO_TAGS,
     ContestQuery,
@@ -61,7 +62,7 @@ class ContestRecord:
     apply_end: date
     event_start: date | None
     event_end: date | None
-    apply_url: str
+    apply_url: str | None  # 못 가져온 대회는 None (Q-29)
     source_url: str
     sources: tuple[str, ...]
     tags: ContestTags = NO_TAGS
@@ -164,7 +165,7 @@ def _to_record(doc: Document) -> ContestRecord:
         apply_end=apply_end,
         event_start=_to_date(doc.get("event_start")),
         event_end=_to_date(doc.get("event_end")),
-        apply_url=doc["apply_url"],
+        apply_url=doc.get("apply_url"),
         source_url=doc["source_url"],
         sources=tuple(s["source"] for s in doc.get("sources", [])),
         tags=_to_tags(doc.get("tags", {})),
@@ -189,7 +190,8 @@ class ContestRepository:
     ) -> SaveOutcome:
         """merge_key 기준 upsert. 같은 입력을 여러 번 저장해도 문서는 하나다 (F2-2 멱등).
 
-        분류 태그(F3-1)는 다른 필드와 함께 대표 소스의 값을 따른다.
+        분류 태그(F3-1)는 다른 필드와 함께 대표 소스의 값을 따른다. 참가 링크는 못 찾았으면
+        덮어쓰지 않고, 비어 있으면 어느 소스의 링크로든 채운다 (Q-29).
         """
         self._rekey(contest, merge_key)
         fields = {**_fields(contest), "tags": _tags_doc(tags)}
@@ -197,11 +199,14 @@ class ContestRepository:
         if self._insert_if_absent(merge_key, fields, origin, now):
             return SaveOutcome.INSERTED
 
+        if contest.apply_url is None:
+            del fields["apply_url"]
         representative = self._contests.update_one(
             {"merge_key": merge_key, "source": contest.source},
             {"$set": {**fields, "updated_at": now}},
         )
         self._upsert_origin(merge_key, origin)
+        self._fill_apply_url(merge_key, contest.apply_url)
         return SaveOutcome.UPDATED if representative.matched_count else SaveOutcome.MERGED
 
     def _rekey(self, contest: RawContest, merge_key: str) -> None:
@@ -245,6 +250,14 @@ class ContestRepository:
             # 먼저 만든 쪽을 따르고 이후 갱신·병합 단계로 넘어간다.
             return False
         return result.upserted_id is not None
+
+    def _fill_apply_url(self, merge_key: str, apply_url: str | None) -> None:
+        """참가 링크가 없는(None·필드 없음) 대회에만 링크를 채운다. 이미 있으면 그대로 둔다."""
+        if apply_url is None:
+            return
+        self._contests.update_one(
+            {"merge_key": merge_key, "apply_url": None}, {"$set": {"apply_url": apply_url}}
+        )
 
     def _upsert_origin(self, merge_key: str, origin: dict[str, Any]) -> None:
         """출처를 추가하거나 갱신한다.
@@ -342,3 +355,16 @@ class BookmarkRepository:
             .order_by(Bookmark.created_at.desc(), Bookmark.contest_id)
         )
         return [BookmarkRecord(contest_id=r.contest_id, created_at=r.created_at) for r in rows]
+
+
+class ClickRepository:
+    """PostgreSQL 참가 바로가기 클릭 저장소 (F2-5). 클릭 수는 행을 세어 집계한다."""
+
+    def __init__(self, session: Session) -> None:
+        """요청 단위 세션을 받는다."""
+        self._session = session
+
+    def add(self, contest_id: str, user_id: int | None, now: datetime) -> None:
+        """클릭 한 건을 남긴다. 같은 회원이 여러 번 눌러도 매번 센다."""
+        self._session.add(ContestClick(contest_id=contest_id, user_id=user_id, clicked_at=now))
+        self._session.commit()

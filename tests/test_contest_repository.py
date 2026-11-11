@@ -27,6 +27,7 @@ def _contest(
     title: str = "2026 AI 해커톤",
     apply_start: date | None = date(2026, 10, 1),
     apply_end: date = date(2026, 11, 1),
+    apply_url: str | None = "",
 ) -> RawContest:
     """필드 값을 바꿔 가며 쓰는 테스트용 대회를 만든다."""
     return RawContest(
@@ -37,7 +38,8 @@ def _contest(
         apply_end=apply_end,
         event_start=None,
         event_end=None,
-        apply_url=f"https://{source}.example.com",
+        # 빈 문자열이면 소스별 기본 링크, None 이면 링크를 못 찾은 대회 (Q-29)
+        apply_url=f"https://{source}.example.com" if apply_url == "" else apply_url,
         source=source,
         source_url=f"https://{source}.example.com/{title}",
     )
@@ -258,3 +260,45 @@ def test_find_by_tags_keeps_unclassified(mongo_db: Database[Document]) -> None:
         tags=ContestTags(field=frozenset({"AI", "보안"}), format=frozenset({"해커톤"}))
     )
     assert sorted(_titles(repo, ai_or_security_hackathon)) == ["AI 해커톤", "미분류", "형식 미분류"]
+
+
+@pytest.mark.feature("F2-5")
+def test_contest_without_apply_url_is_saved_with_null_link(mongo_db: Database[Document]) -> None:
+    """참가 링크를 못 찾은 대회도 저장하고 링크는 None 으로 읽힌다 (Q-29)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a", apply_url=None))
+
+    (record,), _ = repo.find(ContestQuery(), TODAY)
+
+    assert record.apply_url is None
+
+
+@pytest.mark.feature("F2-5")
+def test_recollect_without_link_keeps_saved_apply_url(mongo_db: Database[Document]) -> None:
+    """다시 수집할 때 링크를 못 찾아도 이미 저장된 링크는 지우지 않는다 (F2-1 기존 데이터 유지)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a"))
+
+    assert _save(repo, _contest("a", field="AI, 데이터", apply_url=None)) is SaveOutcome.UPDATED
+
+    (record,), _ = repo.find(ContestQuery(), TODAY)
+    assert (record.field, record.apply_url) == ("AI, 데이터", "https://a.example.com")
+
+
+@pytest.mark.feature("F2-5")
+def test_merged_source_fills_missing_apply_url(mongo_db: Database[Document]) -> None:
+    """대표 소스에 링크가 없으면 같은 대회를 수집한 다른 소스의 링크로 채운다 (Q-29)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a", apply_url=None))
+    _save(repo, _contest("b"))
+    _save(repo, _contest("c"))
+
+    (record,), _ = repo.find(ContestQuery(), TODAY)
+
+    # 먼저 링크를 준 소스를 따르고, 대표 소스가 다시 링크 없이 수집해도 남는다
+    _save(repo, _contest("a", apply_url=None))
+    (again,), _ = repo.find(ContestQuery(), TODAY)
+    assert record.apply_url == again.apply_url == "https://b.example.com"
