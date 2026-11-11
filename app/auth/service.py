@@ -38,7 +38,7 @@ from app.auth.repository import (
     TokenStore,
     UserRepository,
 )
-from app.auth.rules import ProfileInput, ordered_fields
+from app.auth.rules import InterestField, ProfileInput, ordered_fields
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
 from app.core.db import get_settings
@@ -223,6 +223,10 @@ class UserService:
             raise NicknameTakenError("이미 사용 중인 닉네임입니다.") from exc
         return user
 
+    def interest_fields(self, user_id: int) -> frozenset[InterestField]:
+        """관심 분야 필터(F3-3)에 쓸 프로필 관심 분야. 비어 있으면 분야 조건이 없다 (Q-24)."""
+        return frozenset(InterestField(i.field) for i in self.get_me(user_id).interests)
+
 
 @lru_cache
 def get_http_client() -> httpx.Client:
@@ -298,3 +302,16 @@ def require_access(
 
 
 CurrentToken = Annotated[TokenClaims, Depends(require_access)]
+
+
+def optional_access(
+    issuer: Issuer,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> TokenClaims | None:
+    """인증이 선택인 API 의 의존성. 토큰이 없으면 None, 있으면 검증한다 (만료·위조는 401)."""
+    if credentials is None:
+        return None
+    return issuer.authenticate(credentials.credentials)
+
+
+OptionalToken = Annotated[TokenClaims | None, Depends(optional_access)]

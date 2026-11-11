@@ -1,18 +1,28 @@
-"""대회 조회 API (F2-3, F2-4, F3-3). 저장소는 메모리 가짜로 바꾸고 오늘 날짜를 고정한다."""
+"""대회 조회 API (F2-3, F2-4, F3-3). 저장소는 메모리 가짜로 바꾸고 오늘 날짜를 고정한다.
+
+회원·토큰은 메모리 SQLite·fakeredis 로 띄운 실제 서비스를 쓴다 (`tests/unit/conftest.py`).
+"""
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from app.auth.repository import UserRepository
+from app.auth.service import UserService, get_token_issuer, get_user_service
+from app.auth.tokens import TokenIssuer
 from app.contests.repository import ContestRecord, ContestRepository
 from app.contests.router import today_kst
 from app.contests.rules import NO_TAGS, ContestQuery, ContestStatus, ContestTags, SortOrder
 from app.contests.service import ContestQueryService, get_query_service
+from app.core.time import KST, now_kst
 from app.main import app
+from tests.unit.auth_support import bearer
 
 TODAY = date(2026, 10, 23)
+NOW = datetime(2026, 10, 23, 9, 0, tzinfo=KST)
 
 
 def _record(
@@ -76,12 +86,26 @@ def repo() -> FakeRepository:
 
 
 @pytest.fixture
-def client(repo: FakeRepository) -> Iterator[TestClient]:
-    """조회 서비스와 날짜를 고정한 API 클라이언트."""
+def client(repo: FakeRepository, session: Session, issuer: TokenIssuer) -> Iterator[TestClient]:
+    """조회 서비스·날짜·회원 저장소·토큰 발급기를 고정한 API 클라이언트."""
     app.dependency_overrides[get_query_service] = lambda: ContestQueryService(repo)
     app.dependency_overrides[today_kst] = lambda: TODAY
+    app.dependency_overrides[get_token_issuer] = lambda: issuer
+    app.dependency_overrides[get_user_service] = lambda: UserService(UserRepository(session))
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+def _member(
+    session: Session, issuer: TokenIssuer, provider_id: str, fields: list[str]
+) -> dict[str, str]:
+    """관심 분야를 정한 회원을 만들고 그 회원의 Authorization 헤더를 돌려준다."""
+    users = UserRepository(session)
+    user, _ = users.get_or_create("google", provider_id, NOW)
+    users.update_profile(
+        user, nickname=f"회원{provider_id}", grade=None, school_type="대학교", fields=fields
+    )
+    return bearer(issuer.issue(user.id, now_kst()).access_token)  # 만료 검사는 실제 시각 기준
 
 
 @pytest.mark.feature("F2-3")
@@ -222,3 +246,107 @@ def test_detail_returns_classified_tags_in_vocabulary_order(client: TestClient) 
     assert body["tags"] == {"field": ["개발", "AI"], "format": ["해커톤"]}
     assert body["tag_check_needed"] is False
     assert client.get("/contests/b").json()["tag_check_needed"] is True
+
+
+@pytest.mark.feature("F3-3")
+def test_logged_in_list_does_not_apply_profile_fields_by_default(
+    client: TestClient, repo: FakeRepository, session: Session, issuer: TokenIssuer
+) -> None:
+    """로그인해도 기본 목록은 프로필 관심 분야로 거르지 않는다 (Q-24)."""
+    headers = _member(session, issuer, "a", ["AI", "보안"])
+
+    res = client.get("/contests", headers=headers)
+
+    assert res.status_code == 200
+    assert repo.queries[0].tags == NO_TAGS
+
+
+@pytest.mark.feature("F3-3")
+def test_interests_filter_uses_profile_fields(
+    client: TestClient, repo: FakeRepository, session: Session, issuer: TokenIssuer
+) -> None:
+    """interests=true 면 프로필 관심 분야를 분야 필터로 쓰고 다른 조건은 그대로 둔다."""
+    headers = _member(session, issuer, "a", ["AI", "보안"])
+
+    res = client.get("/contests", params={"interests": "true", "format": "해커톤"}, headers=headers)
+
+    assert res.status_code == 200
+    query = repo.queries[0]
+    assert query.tags == ContestTags(field=frozenset({"AI", "보안"}), format=frozenset({"해커톤"}))
+    assert query.statuses == {ContestStatus.OPEN, ContestStatus.UPCOMING}
+
+
+@pytest.mark.feature("F3-3")
+def test_interests_filter_keeps_unclassified_marked(
+    client: TestClient, session: Session, issuer: TokenIssuer
+) -> None:
+    """관심 분야 필터로 미분류라서 걸린 대회도 분류 확인 필요로 표시한다."""
+    headers = _member(session, issuer, "a", ["AI"])
+
+    res = client.get("/contests", params={"interests": "true"}, headers=headers)
+
+    items = {item["id"]: item for item in res.json()["items"]}
+    assert items["a"]["tag_check_needed"] is False
+    assert items["b"]["tag_check_needed"] is True
+
+
+@pytest.mark.feature("F3-3")
+def test_interests_filter_without_login_returns_401(
+    client: TestClient, repo: FakeRepository
+) -> None:
+    """로그인하지 않고 interests=true 를 보내면 401 이다."""
+    res = client.get("/contests", params={"interests": "true"})
+
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "TOKEN_INVALID"
+    assert repo.queries == []
+
+
+@pytest.mark.feature("F3-3")
+@pytest.mark.parametrize("path", ["/contests", "/contests/a"])
+def test_forged_token_returns_401(client: TestClient, path: str) -> None:
+    """인증이 선택인 목록·상세도 위조 토큰은 401 `TOKEN_INVALID` 다 (ADR-0004)."""
+    res = client.get(path, headers=bearer("not-a-jwt"))
+
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "TOKEN_INVALID"
+
+
+@pytest.mark.feature("F3-3")
+@pytest.mark.parametrize("path", ["/contests", "/contests/a"])
+def test_expired_token_returns_401_expired(
+    client: TestClient, issuer: TokenIssuer, path: str
+) -> None:
+    """만료된 토큰은 401 `TOKEN_EXPIRED` 라 프론트가 Refresh 로 재발급하고 다시 부른다."""
+    expired = issuer.issue(1, now_kst() - timedelta(hours=1)).access_token
+
+    res = client.get(path, headers=bearer(expired))
+
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "TOKEN_EXPIRED"
+
+
+@pytest.mark.feature("F3-3")
+def test_interests_filter_with_field_returns_400(
+    client: TestClient, session: Session, issuer: TokenIssuer
+) -> None:
+    """관심 분야 필터와 분야 직접 선택은 함께 쓸 수 없다."""
+    headers = _member(session, issuer, "a", ["AI"])
+
+    res = client.get("/contests", params={"interests": "true", "field": "보안"}, headers=headers)
+
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.feature("F3-3")
+def test_interests_filter_with_empty_profile_lists_all_fields(
+    client: TestClient, repo: FakeRepository, session: Session, issuer: TokenIssuer
+) -> None:
+    """프로필에 관심 분야가 없으면 분야 조건 없이 전체 목록을 보여 준다 (Q-24)."""
+    headers = _member(session, issuer, "a", [])
+
+    res = client.get("/contests", params={"interests": "true"}, headers=headers)
+
+    assert res.status_code == 200
+    assert repo.queries[0].tags == NO_TAGS

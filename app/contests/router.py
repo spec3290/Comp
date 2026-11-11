@@ -1,6 +1,8 @@
 """대회 API: 목록 (F2-3, 분야·형식 필터 F3-3), 상세 (F2-4), 저장 (F2-7).
 
 목록·상세는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
+목록의 `interests=true` 는 로그인 회원의 프로필 관심 분야로 분야를 거른다. 기본 목록에는
+관심 분야를 적용하지 않는다 (Q-24).
 """
 
 from __future__ import annotations
@@ -11,7 +13,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.auth.dependencies import CurrentUserId
+from app.auth.dependencies import CurrentUserId, OptionalUserId, get_optional_user_id
+from app.auth.service import UserService, get_user_service
+from app.auth.tokens import TokenInvalidError
 from app.contests.rules import (
     DEFAULT_STATUSES,
     ContestField,
@@ -39,6 +43,7 @@ DEFAULT_PAGE_SIZE = 20
 
 Service = Annotated[ContestQueryService, Depends(get_query_service)]
 Bookmarks = Annotated[BookmarkService, Depends(get_bookmark_service)]
+Users = Annotated[UserService, Depends(get_user_service)]
 
 
 def today_kst() -> date:
@@ -72,10 +77,25 @@ def _parse_statuses(value: str | None) -> frozenset[ContestStatus]:
     return frozenset(ContestStatus(n) for n in names)
 
 
+def _field_filter(
+    field: str | None, interests: bool, user_id: int | None, users: UserService
+) -> frozenset[str]:
+    """분야 필터 값. interests 면 직접 고른 분야 대신 프로필 관심 분야를 쓴다 (Q-24)."""
+    if not interests:
+        return _parse_choices("field", field, ContestField)
+    if _split(field):
+        raise BadRequestError("field 와 interests 는 함께 쓸 수 없습니다.")
+    if user_id is None:
+        raise TokenInvalidError("인증이 필요합니다.")
+    return frozenset(f.value for f in users.interest_fields(user_id))
+
+
 @router.get("", response_model=ContestPageOut)
 def list_contests(
     service: Service,
     today: Today,
+    user_id: OptionalUserId,
+    users: Users,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     sort: SortOrder = SortOrder.DEADLINE,
@@ -84,6 +104,9 @@ def list_contests(
     contest_format: Annotated[
         str | None, Query(alias="format", description="해커톤,경진대회,공모전,아이디어톤")
     ] = None,
+    interests: Annotated[
+        bool, Query(description="true 면 내 프로필 관심 분야만 (로그인 필요, field 와 함께 못 씀)")
+    ] = False,
     q: Annotated[str | None, Query(max_length=100, description="제목 검색")] = None,
 ) -> ContestPageOut:
     """필터·정렬·페이지 조건으로 대회 목록을 돌려준다."""
@@ -91,7 +114,7 @@ def list_contests(
         statuses=_parse_statuses(status),
         keyword=q.strip() if q and q.strip() else None,
         tags=ContestTags(
-            field=_parse_choices("field", field, ContestField),
+            field=_field_filter(field, interests, user_id, users),
             format=_parse_choices("format", contest_format, ContestFormat),
         ),
         sort=sort,
@@ -101,7 +124,11 @@ def list_contests(
     return ContestPageOut.from_page(service.list_contests(query, today))
 
 
-@router.get("/{contest_id}", response_model=ContestDetailOut)
+@router.get(
+    "/{contest_id}",
+    response_model=ContestDetailOut,
+    dependencies=[Depends(get_optional_user_id)],  # 보낸 토큰이 만료·위조면 401 (ADR-0004)
+)
 def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetailOut:
     """대회 상세를 돌려준다."""
     return ContestDetailOut.from_view(service.get_contest(contest_id, today))
