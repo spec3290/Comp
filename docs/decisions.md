@@ -31,7 +31,7 @@
 
 ### ADR-0002 JWT와 Refresh Token 회전 (채택)
 - **배경**: F1-4/F1-5가 서비스 자체 JWT, Refresh 회전, 만료·위조 401, 로그아웃 시 Access 블랙리스트를 요구한다.
-- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`fam`/`type`/`iat`/`exp`, HS256). `fam`은 로그인 세션(family) 식별자로 Refresh와 같다. Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 폐기는 `refresh_family_revoked:{family_id}` 표식을 먼저 남기고, 새 Refresh 저장은 이 표식을 WATCH한 트랜잭션에서 해서 재발급과 폐기가 겹쳐도 폐기된 family에 토큰이 남지 않는다. `JWT_SECRET`은 32바이트 이상이어야 하고 앱 기동 때 검사한다. 로그아웃은 Access의 `fam`으로 그 세션의 Refresh를 전부 지우고(다른 기기 로그인은 유지), 쓰던 Access `jti`를 Redis `blacklist:{jti}`에 남은 만료 시간(밀리초 올림 + 1초)만큼 TTL로 둔다(Q-17). `fam`이 없는 Access(F1-5 이전 발급)는 로그아웃할 세션을 알 수 없어 `TOKEN_INVALID`로 거절하고, 재발급하면 `fam`이 붙는다. 인증이 필요한 요청마다 블랙리스트와 세션 폐기 표식을 `EXISTS` 한 번으로 조회해, 로그아웃·재사용 탐지로 폐기된 세션에서 이전에 발급한 Access도 함께 거절한다.
+- **결정**: Access는 짧은 만료(15분, `sub`/`jti`/`fam`/`type`/`iat`/`exp`, HS256). `fam`은 로그인 세션(family) 식별자로 Refresh와 같다. Refresh는 14일, JWT(`sub`/`jti`/`fam`/`type`/`iat`/`exp`)로 발급하고 Redis의 `refresh:{jti}` 해시(`user_id`, `family_id`)에 만료와 같은 TTL로 저장하며(Q-4), 재발급마다 회전한다. 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료까지 재사용을 탐지하고, 표시는 WATCH 트랜잭션으로 해서 같은 토큰의 동시 재발급도 한 번만 성공한다. family의 jti는 `refresh_family:{family_id}` 집합에 모은다. 이미 회전된 Refresh가 다시 오면 탈취로 보고 같은 `family_id`를 전부 폐기하고 401 (다른 기기의 로그인 family는 유지). 폐기는 `refresh_family_revoked:{family_id}` 표식을 먼저 남기고, 새 Refresh 저장은 이 표식을 WATCH한 트랜잭션에서 해서 재발급과 폐기가 겹쳐도 폐기된 family에 토큰이 남지 않는다. `JWT_SECRET`은 32바이트 이상이어야 하고 앱 기동 때 검사한다. 로그아웃은 Access의 `fam`으로 그 세션의 Refresh를 전부 지우고(다른 기기 로그인은 유지), 쓰던 Access `jti`를 Redis `blacklist:{jti}`에 남은 만료 시간(밀리초 올림 + 1초)만큼 TTL로 둔다(Q-17). `fam`이 없는 Access(F1-5 이전 발급)는 로그아웃할 세션을 알 수 없어 `TOKEN_INVALID`로 거절하고, 재발급하면 `fam`이 붙는다. 인증이 필요한 요청마다 블랙리스트와 세션 폐기 표식을 `EXISTS` 한 번으로 조회해, 로그아웃·재사용 탐지로 폐기된 세션에서 이전에 발급한 Access도 함께 거절한다. 회원의 family는 `user_families:{user_id}` 집합에도 모아(가장 최근 Refresh와 같은 TTL) 탈퇴(F1-8) 때 모든 기기의 세션을 같은 방식으로 폐기한다. 회원 id가 아니라 세션 단위로 막아 id를 다시 쓰는 DB에서도 새 회원이 막히지 않는다.
 - **대안**: 세션 쿠키(명세가 JWT를 명시), Refresh 비회전(탈취 탐지가 어려움).
 - **결과**: 탈취 탐지와 즉시 로그아웃을 얻는다. 요청마다 블랙리스트 조회 비용과 정리 작업이 생긴다. Refresh 저장소가 Redis라 Redis가 내려가면 로그인·재발급이 실패한다.
 
@@ -55,6 +55,7 @@
     - 내 관심 분야(F3-3, Q-24): `interests=true`면 로그인 회원의 프로필 관심 분야를 분야 필터로 쓴다. 기본값 `false`, 기본 목록에는 관심 분야를 적용하지 않는다. 토큰이 없으면 401 `TOKEN_INVALID`, `field`와 함께 보내면 400 `VALIDATION_ERROR`, 프로필에 관심 분야가 없으면 분야 조건 없이 전체 목록.
     - `tag_check_needed`: 태그 필터가 있으면 필터한 차원 중 하나라도 미분류인 대회, 필터가 없으면 어느 차원에도 태그가 없는 대회가 `true`.
   - 토큰이 없는 요청도 401 `TOKEN_INVALID`다. 인증이 필요한 엔드포인트는 `app.auth.dependencies.get_current_user_id`로 사용자를 받는다.
+  - 회원 탈퇴(F1-8, Q-25): `POST /users/me/withdrawal`(Access) → `{ "redirect_url": "..." }`. 프론트는 브라우저를 이 주소(제공자 계정 선택 화면, `prompt=select_account`)로 보낸다. state는 쿠키가 아니라 Redis `withdraw_state:{state}`(회원 id, 10분, GETDEL로 한 번만 사용)에 둔다. `GET /auth/{provider}/withdraw/callback`은 재인증한 계정이 탈퇴를 요청한 회원과 같으면 받은 제공자 토큰으로 연결을 해제(revoke)하고 회원을 지운 뒤 `FRONTEND_WITHDRAW_REDIRECT_URL?withdrawn=true`로 302(`Cache-Control: no-store`). 실패는 `?error=<코드>`이고 회원은 그대로다: state 없음·만료·재사용은 `OAUTH_STATE_MISMATCH`, 취소·제공자 거절은 `OAUTH_FAILED`, 제공자 장애는 `OAUTH_UNAVAILABLE`, 다른 계정으로 인증하면 `OAUTH_ACCOUNT_MISMATCH`(그 계정의 연결은 끊지 않음). revoke가 실패하면 탈퇴하지 않는다(Q-7). 탈퇴 후 그 회원의 모든 Access·Refresh는 401 `TOKEN_INVALID`.
   - 대회 저장(F2-7): `PUT`·`DELETE /contests/{id}/bookmark`는 본문 없이 204(멱등). 없는 대회 저장은 404, 마감 대회 저장은 409 `CONTEST_CLOSED`(Q-18). `GET /users/me/bookmarks`는 `?page&size` 페이지네이션, 항목은 대회 응답 필드 + `bookmarked_at`(KST ISO 8601), 최근 저장순.
   - 대회 응답 필드: `id`, `title`, `host`, `field`, `status`(`open`/`upcoming`/`closed`, 조회 시 계산), `d_day`(마감 당일 0), `apply_start`, `apply_end`, `event_start`, `event_end`(날짜 `YYYY-MM-DD`, 없으면 null), `apply_url`, `source_url`, `tags`(`{ field, format }` 각각 어휘 순서의 목록, 빈 목록은 미분류), `tag_check_needed`. `field`는 소스가 붙인 분야 태그 원문(쉼표 구분)이고 필터 값과 다르다. 상세는 `sources`(수집 출처 목록)를 더한다.
 - **엔드포인트 초안**:
@@ -65,7 +66,7 @@
 | F1-4 | `POST /auth/refresh` (본문 `refresh_token`) | Refresh |
 | F1-5 | `POST /auth/logout` → 204 | Access |
 | F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
-| F1-8 | `DELETE /users/me` | Access |
+| F1-8 | `POST /users/me/withdrawal` → `{ redirect_url }`, `GET /auth/{provider}/withdraw/callback` (Q-25) | Access / 없음(state) |
 | F2-3 | `GET /contests` | 선택 (`interests=true`는 Access 필요. 토큰을 보내면 위조는 401 `TOKEN_INVALID`, 만료는 401 `TOKEN_EXPIRED`) |
 | F2-4 | `GET /contests/{id}` | 선택 (토큰을 보내면 목록과 같이 검증) |
 | F2-5 | `POST /contests/{id}/clicks` → `{ "apply_url": ... }` | 선택 |
@@ -84,6 +85,8 @@
 | refresh_tokens (Redis) | 테이블 없이 `refresh:{jti}` 해시: user_id, family_id. 만료는 Redis TTL (Q-4) |
 | login_codes (Redis) | `login_code:{code}` 문자열: user_id. 60초 TTL, 교환 때 GETDEL로 지운다 (Q-16) |
 | access_token_blacklist (Redis) | 테이블 없이 `blacklist:{jti}`. 만료는 Redis TTL이라 정리 작업이 없다 (Q-17) |
+| user_families (Redis) | `user_families:{user_id}` 집합: 회원의 family_id. 가장 최근 Refresh와 같은 TTL. 탈퇴 때 전부 폐기 (F1-8) |
+| withdraw_states (Redis) | `withdraw_state:{state}` 문자열: user_id. 10분 TTL, 콜백 때 GETDEL로 지운다 (Q-25) |
 | contests (MongoDB) | _id, merge_key(`UNIQUE`, 정규화한 제목+주최+마감일), title, host, field, apply_start, apply_end, event_start, event_end, apply_url, source_url, source(대표 소스), sources[], created_at, updated_at. 날짜는 KST 자정 tz-aware datetime으로 저장(BSON에 날짜 타입이 없음) |
 | contest_sources (MongoDB) | 별도 컬렉션 없이 `contests.sources[]`에 내장: source, source_url, fetched_at (병합 근거) |
 | contest_tags (MongoDB) | 별도 컬렉션 없이 `contests.tags`에 내장: `{ field: [], format: [] }`. 빈 목록(또는 `tags`·차원 키 없음)은 그 차원이 미분류. 대표 소스의 태그·제목으로 수집 때마다 다시 분류한다(Q-23). origin(rule/llm)은 F6-4에서 추가 |
@@ -128,7 +131,7 @@
 | Q-4 | Access/Refresh 만료 시간과 Refresh Token 저장소는? | F1-4, F1-5 (ADR-0002) | Access 15분, Refresh 14일. Refresh Token은 Redis에 저장 (사용자 지정). 블랙리스트 저장소는 Q-17로 분리 | 결정됨 |
 | Q-5 | 닉네임 길이·중복 허용 여부, 학년·학교 유형의 허용 값은? | F1-7 | 닉네임은 앞뒤 공백 제외 2~12자(NFC, 제어 문자 금지), 중복 불가. 학교 유형: 중학교/고등학교/대학교/기타. 학년 1~6, 선택 입력. 관심 분야: 개발/AI/보안/디자인/아이디어 복수 선택 (사용자가 기본값 승인) | 결정됨 |
 | Q-6 | 접수 시작일이 없는 대회의 상태 판정은? | F2-3 | 소스에 값이 있으면 크롤링한다(DACON은 일정 HTML의 '참가(신청) 기간', 없으면 대회 기간). 그래도 시작일이 없으면 '접수 중'으로 간주 | 결정됨 |
-| Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 로컬 삭제는 진행, revoke 실패는 로그 + 재시도 큐는 2차 | 열림 |
+| Q-7 | 회원 탈퇴 시 OAuth revoke가 실패하면 탈퇴를 진행하나? | F1-8 | 진행하지 않는다. revoke가 실패하면(제공자 장애·거절) 아무것도 지우지 않고 프론트에 `?error=`로 알려 사용자가 다시 시도한다 (2026-11-12 사용자 결정, 이전 제안: 로컬 삭제는 진행) | 결정됨 |
 | Q-8 | 참가 형태·지역 키워드 목록의 초기 규칙 세트는? | F3-1 | 에이전트가 초안을 `app/contests/qualification_rules.toml`로 구성하고 PR에서 검토(사용자 승인). 애매한 단어(단독 '개인'·'팀'·지역명, 'N명 이내')는 넣지 않아 잘못된 태그보다 미분류를 택한다 | 폐기 (Q-23: 참가 자격 분류를 없앰) |
 | Q-9 | 한 대회에 여러 태그가 걸릴 때(예: AI+개발) 필터 매칭은 OR인가 AND인가? | F2-3, F3-3 (ADR-0004) | 같은 파라미터 안은 OR, 파라미터 사이는 AND. 2026-11-11 Q-23 이후 분야·형식 필터에 그대로 적용 | 결정됨 |
 | Q-10 | 대회 일정이 여러 구간이면 어떻게 저장하나? | F2-1, F4 | MVP는 시작일·종료일 한 쌍만 저장 | 열림 |
@@ -146,3 +149,4 @@
 | Q-22 | GitHub 호스팅 러너는 IP가 실행마다 바뀌어 Atlas IP Access List에 막힌다(2026-11-06 첫 정기 수집이 `TLSV1_ALERT_INTERNAL_ERROR`로 실패). 어떻게 허용하나? | F2-1 | `collect.yml`이 수집 전에 Atlas Admin API로 현재 러너 IP를 `deleteAfterDate`(1시간 뒤)와 함께 등록하고 `ACTIVE`가 될 때까지 기다린 뒤, 수집이 끝나면(실패해도) 지운다. API 키는 Project Network Access Manager 역할만 주고 Secret `ATLAS_PUBLIC_KEY`·`ATLAS_PRIVATE_KEY`, 프로젝트 ID는 Variable `ATLAS_PROJECT_ID`에 둔다. 전제: 러너 IP를 미리 알 수 없으므로 조직 설정 "Require IP Access List for the Atlas Administration API"는 끄고 API 키에 접근 목록을 두지 않는다(켜져 있으면 등록 단계가 403으로 실패하고 수집은 돌지 않는다). 이 설정은 조직의 모든 API 키·서비스 계정에 적용되므로, 키를 추가할 때는 그 키에 자체 접근 목록을 둔다(2026-11-06 확인: 이 키 하나뿐). 대안: `0.0.0.0/0` 허용(DB가 인터넷 전체에 열림), 고정 IP 러너(유료·과함) (사용자 결정) | 결정됨 |
 | Q-23 | 참가 자격 원문을 주는 소스가 없어 자격 태그가 거의 붙지 않는다(2026-11-10 실데이터 388건 중 원문 0건, 태그 4건). 자격 필터를 유지하나, 다른 분류로 바꾸나? | F2-1, F2-4, F3-1, F3-3 (ADR-0004, ADR-0009) | 참가 자격(학력·참가 형태·지역) 분류·필터와 `eligibility_text`를 없앤다. 대신 근거가 분명한 두 차원만 분류한다. **분야**(개발/AI/보안/디자인/아이디어, 프로필 관심 분야와 같은 어휘): 소스가 붙인 태그를 대응표로 옮긴다(태그 전체 일치, 본문 추측 없음). 소스 자체가 분야를 정하면 기본값으로 더한다(DACON → AI, Devpost → 개발). Dev Event `기술일반`처럼 분야를 알 수 없는 태그는 넣지 않는다. **형식**(해커톤/경진대회/공모전/아이디어톤): 제목의 형식 단어, 없으면 소스 기본값(DACON → 경진대회, Devpost → 해커톤). '챌린지'·'대회'는 넣지 않는다. 두 차원 모두 미분류는 필터에서 빼지 않고 `tag_check_needed`로 표시한다. 기존 `field` 원문 부분 일치 검색은 분야 필터로 대체한다 (2026-11-11 사용자 결정) | 결정됨 |
 | Q-24 | 로그인한 회원의 대회 목록에 프로필 관심 분야를 분야 필터 기본값으로 적용하나? | F1-7, F2-3, F3-3 (ADR-0004) | 적용하지 않는다. 기본 목록은 마감되지 않은 대회 전체이고, '내 관심 분야만' 버튼이 `GET /contests?interests=true`를 보내면 서버가 프로필 관심 분야로 거른다(2026-11-11 사용자 결정). 비로그인은 401, `field`와 동시 사용은 400, 관심 분야가 빈 프로필은 분야 조건 없이 전체 목록(사용자 결정). 미분류 대회는 다른 분야 필터와 같이 `tag_check_needed`로 함께 보인다. 인증이 선택인 목록·상세도 토큰을 보내면 검증한다: 위조는 401 `TOKEN_INVALID`, 만료는 401 `TOKEN_EXPIRED`이고 프론트는 `POST /auth/refresh`로 재발급한 뒤 다시 부른다(사용자 결정) | 결정됨 |
+| Q-25 | 로그인은 `openid` 범위만 받고 제공자 토큰을 저장하지 않아 탈퇴 때 revoke할 토큰이 없다. 어떻게 확보하나? | F1-8 (ADR-0003, ADR-0004) | 탈퇴할 때 제공자 재인증을 한 번 더 받는다(2026-11-12 사용자 결정). `POST /users/me/withdrawal`이 계정 선택 화면 주소를 주고, 탈퇴 콜백(`GOOGLE_WITHDRAW_REDIRECT_URI`, 콘솔에 따로 등록)에서 받은 Access Token으로 revoke한 뒤 회원을 지운다. 제공자 토큰을 저장하지 않고 탈퇴 직전 본인 확인도 된다. 대안: 로그인 때 Google Refresh Token을 암호화해 저장(비밀 보관 부담), revoke 생략(수용 기준 미충족) | 결정됨 |
