@@ -1,4 +1,4 @@
-"""서비스 JWT 발급·검증·회전 (F1-4)·폐기 (F1-5, ADR-0002).
+"""서비스 JWT 발급·검증·회전 (F1-4)·폐기 (F1-5, F1-8, ADR-0002).
 
 Access 는 서명만으로 검증하는 짧은 JWT, Refresh 는 jti 를 Redis 에 저장해 회전·폐기한다.
 만료는 401 `TOKEN_EXPIRED`, 그 밖의 위조·형식 오류·회전·폐기는 모두 401 `TOKEN_INVALID` 다
@@ -128,7 +128,8 @@ class TokenIssuer:
     def authenticate(self, access_token: str) -> TokenClaims:
         """API 요청의 Access 를 검증한다.
 
-        로그아웃한 토큰과, 로그아웃·재사용 탐지로 폐기된 세션에서 이전에 발급한 Access 도 거절한다.
+        로그아웃한 토큰과, 로그아웃·재사용 탐지·탈퇴로 폐기된 세션에서 이전에 발급한 Access 도
+        거절한다.
         """
         claims = self.verify(access_token, "access")
         if self._store.is_access_revoked(claims.jti, claims.family_id):
@@ -139,6 +140,10 @@ class TokenIssuer:
         """로그아웃: 이 로그인 세션(family)의 Refresh 를 지우고 쓰던 Access 를 만료까지 막는다."""
         self._store.revoke_family(access.family_id, self._refresh_ttl)
         self._store.blacklist(access.jti, access.expires_at - now)
+
+    def revoke_user(self, user_id: int) -> None:
+        """탈퇴: 이 회원의 모든 로그인 세션(다른 기기 포함)의 토큰을 폐기한다."""
+        self._store.revoke_user(user_id, self._refresh_ttl)
 
     def rotate(self, refresh_token: str) -> RefreshRecord:
         """Refresh 를 한 번 쓴 것으로 표시한다. 이미 쓴 토큰이면 family 를 폐기하고 401.

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.repository import LoginCodeStore, TokenStore, UserRepository
+from app.auth.repository import LoginCodeStore, TokenStore, UserRepository, WithdrawStateStore
 from app.auth.service import AuthService, build_providers, get_auth_service
 from app.auth.tokens import TokenIssuer
 from app.core.config import Settings
@@ -22,6 +22,7 @@ from tests.unit.auth_support import (
     OUTAGE_CODE,
     REFRESH_TTL,
     SECRET,
+    WITHDRAW_FRONTEND_URL,
     FakeProvider,
     callback,
     claims,
@@ -59,7 +60,9 @@ def test_state_cookie_is_secure_when_callback_is_https(
         UserRepository(session),
         issuer,
         login_codes=LoginCodeStore(redis),
+        withdraw_states=WithdrawStateStore(redis),
         frontend_url=FRONTEND_URL,
+        withdraw_frontend_url=WITHDRAW_FRONTEND_URL,
     )
     app.dependency_overrides[get_auth_service] = lambda: service
     try:
