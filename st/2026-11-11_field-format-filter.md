@@ -37,3 +37,42 @@
 | `uv run python -m mypy` | 통과 (58 source files) |
 | `lint-imports` (`importlinter.cli`를 python으로 실행, exe는 Windows 애플리케이션 제어 정책이 막음) | 통과 (3 kept, 0 broken) |
 | `uv run python -m pytest -q` | 231 passed, 16 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI에서 실행) |
+
+---
+
+# 코드 리뷰: 내 관심 분야 필터 (`interests=true`)
+
+- 날짜: 2026-11-11
+- 브랜치: `feature/37_field-format-filter` (이슈 #37)
+- 기능: F3-3(분야·형식 필터) 마무리, F1-7 문구
+- 결정: Q-24 신설(사용자 결정 2026-11-11), ADR-0004 목록 쿼리·엔드포인트 표 갱신
+
+## 배경
+명세는 "로그인 시 프로필 관심 분야가 분야 필터 기본값"이었다. 사용자가 기본 목록은 프로필과 관계없이 마감되지 않은 대회 전체로 두고, '내 관심 분야만' 버튼으로 걸러 보게 하기로 정했다. 버튼은 `GET /contests?interests=true` 를 보낸다.
+
+## 리뷰 결과: approve
+
+### 반드시 수정 (blocker)
+- 없음
+
+### 권장
+1. **목록·상세에 토큰을 보내면 검증한다** — `GET /contests`·`GET /contests/{id}` 는 `Authorization` 헤더가 있으면 `interests` 와 관계없이 검증한다(하드 규칙 "만료·위조 토큰은 항상 401", 사용자 결정). 위조는 `TOKEN_INVALID`, 만료는 `TOKEN_EXPIRED` 라 프론트는 만료일 때 `POST /auth/refresh` 로 재발급하고 다시 부르면 된다. 지금까지는 헤더를 무시했으므로 프론트에 이 처리가 있는지 확인한다. F2-5(`POST /contests/{id}/clicks`)도 선택 인증을 붙일 때 같은 의존성(`get_optional_user_id`)을 쓴다.
+2. **목록 요청마다 `UserService` 를 조립한다** — `get_session` 이 세션을 만들지만 SQLAlchemy 는 쿼리 전까지 연결하지 않아 `interests=false` 요청은 PostgreSQL 에 닿지 않는다. 비용은 객체 생성뿐이다.
+3. **`pyproject.toml` 미커밋 변경** — 작업 전부터 있던 `[tool.setuptools.packages.find]` 추가분과 `build/` 는 이번 작업과 무관해 커밋하지 않았다.
+
+### 확인한 것
+- 명세: F3-3 수용 기준(다중 선택, 내 관심 분야만, 미분류 노출) 구현, 상태 `done`. F1-7 의 "분야 필터 기본값" 문구를 Q-24 에 맞게 고쳤다.
+- 결정: Q-24 를 사용자 결정으로 기록. 비로그인 401, `field` 동시 사용 400, 빈 관심 분야는 전체 목록(사용자 결정), 목록·상세 토큰 검증(사용자 결정)을 Q-24·ADR-0004 에 적었다.
+- 아키텍처: 관심 분야 조회는 `UserService.interest_fields`(auth service), 라우터는 변환만 한다. 대회 서비스·rules 는 auth 를 모른다. 선택 인증은 `optional_access` / `OptionalUserId`. AC-1~3 유지.
+- 정확성·보안: 프로필 값은 `InterestField` enum 을 거쳐 기존 `$in` 필터로만 쓴다. 탈퇴한 회원의 유효 토큰은 `get_me` 가 401. 토큰·개인정보 로그 없음.
+- 주석: 새 함수·클래스·의존성 모두 한 줄 docstring, 모듈 docstring 에 Q-24 근거.
+- 테스트: `test_contest_api.py` 에 F3-3 테스트(기본 목록 미적용, 관심 분야 필터, 미분류 표시, 비로그인 401, 목록·상세 위조 토큰 `TOKEN_INVALID`, 목록·상세 만료 토큰 `TOKEN_EXPIRED`, `field` 동시 400, 빈 프로필은 전체 목록). 회원·토큰은 메모리 SQLite·fakeredis, 네트워크 없음.
+- Git 규약: 이슈 #37 브랜치. 커밋 전이며 커밋 메시지는 git-workflow 규약으로 쓴다.
+
+### 실행한 검사
+| 검사 | 결과 |
+|---|---|
+| `uv run python -m ruff format .` / `ruff check .` | 통과 |
+| `uv run python -m mypy` | 통과 (58 source files) |
+| `lint-imports` (`importlinter.cli` 를 python 으로 실행, exe 는 Windows 애플리케이션 제어 정책이 막음) | 통과 (3 kept, 0 broken) |
+| `uv run python -m pytest -q` | 241 passed, 16 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI 에서 실행) |

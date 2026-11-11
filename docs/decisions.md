@@ -52,6 +52,7 @@
   - 페이지네이션은 `?page=1&size=20`(size 상한 100), 응답 `{ items, page, size, total }`.
   - 목록 쿼리: `sort=deadline|latest`, `status=open,upcoming,closed`(기본 open,upcoming), `q`(제목 부분 일치, 대소문자 무시, 최대 100자), `field`, `format`. 기본 `size=20`. 같은 파라미터 안은 OR, 파라미터 사이는 AND(Q-9). `미분류`는 제외하지 않고 `tag_check_needed: true`로 표시.
     - 분야·형식 필터(F3-3): `field`(개발/AI/보안/디자인/아이디어), `format`(해커톤/경진대회/공모전/아이디어톤), 값은 `app/contests/rules.py`의 enum. 어휘 밖 값은 400 `VALIDATION_ERROR`. 한 차원을 필터하면 요청 값 태그가 있거나 그 차원이 미분류인 대회가 걸린다. 참가 자격 파라미터(`education`·`team_type`·`region`)와 분야 원문 부분 일치 검색은 없앴다(Q-23).
+    - 내 관심 분야(F3-3, Q-24): `interests=true`면 로그인 회원의 프로필 관심 분야를 분야 필터로 쓴다. 기본값 `false`, 기본 목록에는 관심 분야를 적용하지 않는다. 토큰이 없으면 401 `TOKEN_INVALID`, `field`와 함께 보내면 400 `VALIDATION_ERROR`, 프로필에 관심 분야가 없으면 분야 조건 없이 전체 목록.
     - `tag_check_needed`: 태그 필터가 있으면 필터한 차원 중 하나라도 미분류인 대회, 필터가 없으면 어느 차원에도 태그가 없는 대회가 `true`.
   - 토큰이 없는 요청도 401 `TOKEN_INVALID`다. 인증이 필요한 엔드포인트는 `app.auth.dependencies.get_current_user_id`로 사용자를 받는다.
   - 대회 저장(F2-7): `PUT`·`DELETE /contests/{id}/bookmark`는 본문 없이 204(멱등). 없는 대회 저장은 404, 마감 대회 저장은 409 `CONTEST_CLOSED`(Q-18). `GET /users/me/bookmarks`는 `?page&size` 페이지네이션, 항목은 대회 응답 필드 + `bookmarked_at`(KST ISO 8601), 최근 저장순.
@@ -65,8 +66,8 @@
 | F1-5 | `POST /auth/logout` → 204 | Access |
 | F1-7 | `GET /users/me`, `PUT /users/me/profile` | Access |
 | F1-8 | `DELETE /users/me` | Access |
-| F2-3 | `GET /contests` | 선택 (로그인 시 프로필 관심 분야가 분야 필터 기본값) |
-| F2-4 | `GET /contests/{id}` | 선택 |
+| F2-3 | `GET /contests` | 선택 (`interests=true`는 Access 필요. 토큰을 보내면 위조는 401 `TOKEN_INVALID`, 만료는 401 `TOKEN_EXPIRED`) |
+| F2-4 | `GET /contests/{id}` | 선택 (토큰을 보내면 목록과 같이 검증) |
 | F2-5 | `POST /contests/{id}/clicks` → `{ "apply_url": ... }` | 선택 |
 | F2-7 | `PUT`·`DELETE /contests/{id}/bookmark`, `GET /users/me/bookmarks` | Access |
 
@@ -144,3 +145,4 @@
 | Q-21 | 수집을 어디서 주기 실행하나? | F2-1 | GitHub Actions `collect.yml` cron, 매일 06:00 KST(UTC 21:00) + 수동 실행(`workflow_dispatch`). 접속 URI는 저장소 Secret `MONGODB_URI`, DB 이름은 Variable `MONGODB_DB`(없으면 `contest`). 소스가 하나라도 실패하면 실행이 실패로 표시된다 (사용자 결정) | 결정됨 |
 | Q-22 | GitHub 호스팅 러너는 IP가 실행마다 바뀌어 Atlas IP Access List에 막힌다(2026-11-06 첫 정기 수집이 `TLSV1_ALERT_INTERNAL_ERROR`로 실패). 어떻게 허용하나? | F2-1 | `collect.yml`이 수집 전에 Atlas Admin API로 현재 러너 IP를 `deleteAfterDate`(1시간 뒤)와 함께 등록하고 `ACTIVE`가 될 때까지 기다린 뒤, 수집이 끝나면(실패해도) 지운다. API 키는 Project Network Access Manager 역할만 주고 Secret `ATLAS_PUBLIC_KEY`·`ATLAS_PRIVATE_KEY`, 프로젝트 ID는 Variable `ATLAS_PROJECT_ID`에 둔다. 전제: 러너 IP를 미리 알 수 없으므로 조직 설정 "Require IP Access List for the Atlas Administration API"는 끄고 API 키에 접근 목록을 두지 않는다(켜져 있으면 등록 단계가 403으로 실패하고 수집은 돌지 않는다). 이 설정은 조직의 모든 API 키·서비스 계정에 적용되므로, 키를 추가할 때는 그 키에 자체 접근 목록을 둔다(2026-11-06 확인: 이 키 하나뿐). 대안: `0.0.0.0/0` 허용(DB가 인터넷 전체에 열림), 고정 IP 러너(유료·과함) (사용자 결정) | 결정됨 |
 | Q-23 | 참가 자격 원문을 주는 소스가 없어 자격 태그가 거의 붙지 않는다(2026-11-10 실데이터 388건 중 원문 0건, 태그 4건). 자격 필터를 유지하나, 다른 분류로 바꾸나? | F2-1, F2-4, F3-1, F3-3 (ADR-0004, ADR-0009) | 참가 자격(학력·참가 형태·지역) 분류·필터와 `eligibility_text`를 없앤다. 대신 근거가 분명한 두 차원만 분류한다. **분야**(개발/AI/보안/디자인/아이디어, 프로필 관심 분야와 같은 어휘): 소스가 붙인 태그를 대응표로 옮긴다(태그 전체 일치, 본문 추측 없음). 소스 자체가 분야를 정하면 기본값으로 더한다(DACON → AI, Devpost → 개발). Dev Event `기술일반`처럼 분야를 알 수 없는 태그는 넣지 않는다. **형식**(해커톤/경진대회/공모전/아이디어톤): 제목의 형식 단어, 없으면 소스 기본값(DACON → 경진대회, Devpost → 해커톤). '챌린지'·'대회'는 넣지 않는다. 두 차원 모두 미분류는 필터에서 빼지 않고 `tag_check_needed`로 표시한다. 기존 `field` 원문 부분 일치 검색은 분야 필터로 대체한다 (2026-11-11 사용자 결정) | 결정됨 |
+| Q-24 | 로그인한 회원의 대회 목록에 프로필 관심 분야를 분야 필터 기본값으로 적용하나? | F1-7, F2-3, F3-3 (ADR-0004) | 적용하지 않는다. 기본 목록은 마감되지 않은 대회 전체이고, '내 관심 분야만' 버튼이 `GET /contests?interests=true`를 보내면 서버가 프로필 관심 분야로 거른다(2026-11-11 사용자 결정). 비로그인은 401, `field`와 동시 사용은 400, 관심 분야가 빈 프로필은 분야 조건 없이 전체 목록(사용자 결정). 미분류 대회는 다른 분야 필터와 같이 `tag_check_needed`로 함께 보인다. 인증이 선택인 목록·상세도 토큰을 보내면 검증한다: 위조는 401 `TOKEN_INVALID`, 만료는 401 `TOKEN_EXPIRED`이고 프론트는 `POST /auth/refresh`로 재발급한 뒤 다시 부른다(사용자 결정) | 결정됨 |
