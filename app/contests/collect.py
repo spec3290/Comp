@@ -10,9 +10,11 @@ from __future__ import annotations
 import logging
 
 from app.contests.crawlers.base import ContestSource, new_client
+from app.contests.crawlers.code4korea import Code4KoreaSource
 from app.contests.crawlers.dacon import DaconSource
 from app.contests.crawlers.dev_event import DevEventSource
 from app.contests.crawlers.devpost import DevpostSource
+from app.contests.crawlers.event_us import EventUsSource
 from app.contests.repository import ContestRepository
 from app.contests.rules import load_rules
 from app.contests.service import CollectResult, collect, purge_closed
@@ -31,6 +33,8 @@ def run() -> list[CollectResult]:
             DevEventSource(client),
             DaconSource(client),
             DevpostSource(client),
+            EventUsSource(client),
+            Code4KoreaSource(client),
         ]
         results = collect(sources, repo, today, rules)
     purge_closed(repo, today)

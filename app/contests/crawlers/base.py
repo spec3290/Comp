@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -16,6 +17,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "ContestCollector/0.1 (+https://github.com/spec3290/Comp)"
+_CONTEST_WORDS = re.compile(r"해커톤|hackathon|아이디어톤|ideathon|공모전|경진대회|(?<!학술)대회")
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,15 @@ class ContestSource(Protocol):
     def fetch(self) -> list[RawContest]:
         """대회 목록을 가져온다. 실패 시 예외를 던지고, 호출자가 기존 데이터를 유지한다."""
         ...
+
+
+def looks_like_contest(*texts: str) -> bool:
+    """글에 대회 형식 단어가 있는지 본다. 세미나·교육이 섞인 행사 목록에서 대회만 고를 때 쓴다.
+
+    분류 규칙(classification_rules.toml)의 형식 단어와 같은 축이다. '챌린지'는 형식이 제각각이고
+    '학술대회'는 학회라 넣지 않는다. 공백·대소문자는 무시한다.
+    """
+    return bool(_CONTEST_WORDS.search(re.sub(r"\s+", "", " ".join(texts)).lower()))
 
 
 def new_client() -> httpx.Client:
