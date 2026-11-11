@@ -1,4 +1,4 @@
-"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5) + 내 정보·프로필 (F1-7).
+"""소셜 로그인 (F1-6) + 토큰 재발급 (F1-4) + 로그아웃 (F1-5) + 내 정보·프로필 (F1-7) + 탈퇴 (F1-8).
 
 로그인은 세 단계다. 시작 때 무작위 state 를 만들어 제공자 동의 화면으로 보내고, 콜백에서
 쿠키로 보관한 state 와 비교해 CSRF 를 막은 뒤 인가 코드를 회원 식별자로 바꾼다.
@@ -6,6 +6,8 @@
 콜백은 토큰 대신 일회용 로그인 코드를 붙여 브라우저를 프론트로 보내고, 프론트가 그 코드를
 `POST /auth/token` 으로 교환해 토큰을 받는다. URL·브라우저 기록에 토큰이 남지 않는다 (Q-16).
 재발급은 Refresh 를 회전하고 같은 family 로 새 토큰 쌍을 발급한다 (ADR-0002).
+탈퇴는 제공자 재인증으로 받은 토큰으로 연결을 해제(revoke)한 뒤 회원을 지운다. 해제가
+실패하면 아무것도 지우지 않는다 (Q-7, Q-25).
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from app.auth.repository import (
     NicknameConflictError,
     TokenStore,
     UserRepository,
+    WithdrawStateStore,
 )
 from app.auth.rules import InterestField, ProfileInput, ordered_fields
 from app.auth.tokens import IssuedTokens, TokenClaims, TokenInvalidError, TokenIssuer
@@ -64,9 +67,18 @@ class LoginCodeInvalidError(AppError):
     code = "LOGIN_CODE_INVALID"
 
 
+class OAuthAccountMismatchError(AppError):
+    """탈퇴 재인증에서 탈퇴를 요청한 회원과 다른 계정을 골랐을 때 (400)."""
+
+    status_code = 400
+    code = "OAUTH_ACCOUNT_MISMATCH"
+
+
 # 콜백에서 프론트로 에러 코드를 붙여 돌려보내는 실패. 그 밖의 예외는 그대로 에러 응답이 된다
 LOGIN_FAILURES = (OAuthStateMismatchError, OAuthFailedError, OAuthUnavailableError)
+WITHDRAW_FAILURES = (*LOGIN_FAILURES, OAuthAccountMismatchError)
 LOGIN_CODE_TTL = timedelta(seconds=60)  # 프론트가 리다이렉트를 받고 바로 교환할 시간
+WITHDRAW_STATE_TTL = timedelta(minutes=10)  # 제공자 계정 선택 화면에서 머무를 수 있는 시간
 
 
 class NicknameTakenError(AppError):
@@ -102,14 +114,18 @@ class AuthService:
         users: UserRepository,
         issuer: TokenIssuer,
         login_codes: LoginCodeStore,
+        withdraw_states: WithdrawStateStore,
         frontend_url: str,
+        withdraw_frontend_url: str,
     ) -> None:
         """제공자·저장소·토큰 발급기를 주입받는다."""
         self._providers = providers
         self._users = users
         self._issuer = issuer
         self._login_codes = login_codes
+        self._withdraw_states = withdraw_states
         self._frontend_url = frontend_url
+        self._withdraw_frontend_url = withdraw_frontend_url
 
     def start_login(self, provider_name: str) -> LoginStart:
         """state 를 만들고 제공자 로그인 주소를 돌려준다."""
@@ -152,11 +168,11 @@ class AuthService:
             logger.info("신규 회원 가입: user_id=%d provider=%s", user.id, identity.provider)
         login_code = secrets.token_urlsafe(32)
         self._login_codes.save(login_code, user.id, LOGIN_CODE_TTL)
-        return self._frontend_url_with(login_code=login_code)
+        return _with_query(self._frontend_url, login_code=login_code)
 
     def failed_login_url(self, error_code: str) -> str:
         """로그인 실패를 알릴 프론트 주소 (`?error=OAUTH_FAILED` 등)."""
-        return self._frontend_url_with(error=error_code)
+        return _with_query(self._frontend_url, error=error_code)
 
     def exchange_login_code(self, login_code: str) -> LoginResult:
         """콜백이 준 일회용 코드를 토큰으로 바꾼다. 코드는 한 번만 쓸 수 있다."""
@@ -179,6 +195,43 @@ class AuthService:
         self._issuer.revoke_session(access, now_kst())
         logger.info("로그아웃: user_id=%d", access.user_id)
 
+    def start_withdrawal(self, user_id: int) -> str:
+        """탈퇴를 시작한다. 프론트가 브라우저를 보낼 제공자 재인증 주소를 돌려준다."""
+        user = self._users.get(user_id)
+        if user is None:
+            raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 이미 탈퇴한 회원
+        provider = self._provider(user.provider)
+        state = secrets.token_urlsafe(32)
+        self._withdraw_states.save(state, user.id, WITHDRAW_STATE_TTL)
+        return provider.withdraw_authorization_url(state)
+
+    def complete_withdrawal(self, provider_name: str, code: str | None, state: str | None) -> str:
+        """재인증 콜백을 처리해 연결을 해제하고 회원을 지운다. 프론트 주소를 돌려준다.
+
+        재인증한 계정이 탈퇴를 요청한 회원과 같아야 한다. 연결 해제가 실패하면 회원을 지우지
+        않는다 (Q-7). 실패하면 WITHDRAW_FAILURES 중 하나를 던진다.
+        """
+        provider = self._provider(provider_name)
+        user_id = self._withdraw_states.consume(state) if state else None
+        user = self._users.get(user_id) if user_id is not None else None
+        if user is None or user.provider != provider.name:
+            raise OAuthStateMismatchError("탈퇴 요청이 만료되었거나 올바르지 않습니다.")
+        if not code:
+            raise OAuthFailedError("탈퇴가 취소되었습니다.")
+        grant = provider.exchange_withdraw_code(code)
+        if grant.identity.provider_id != user.provider_id:
+            # 다른 회원일 수 있는 계정의 연결은 끊지 않는다
+            raise OAuthAccountMismatchError("탈퇴할 계정과 다른 계정으로 인증했습니다.")
+        provider.revoke(grant.access_token)
+        self._users.delete(user)
+        self._issuer.revoke_user(user.id)
+        logger.info("회원 탈퇴: user_id=%d provider=%s", user.id, provider.name)
+        return _with_query(self._withdraw_frontend_url, withdrawn="true")
+
+    def failed_withdrawal_url(self, error_code: str) -> str:
+        """탈퇴 실패를 알릴 프론트 주소. 회원은 그대로 남아 있다."""
+        return _with_query(self._withdraw_frontend_url, error=error_code)
+
     def _provider(self, name: str) -> OAuthProvider:
         """이름으로 설정된 제공자를 찾고 없으면 404."""
         provider = self._providers.get(name)
@@ -186,10 +239,11 @@ class AuthService:
             raise NotFoundError(f"지원하지 않거나 설정되지 않은 로그인 제공자입니다: {name}")
         return provider
 
-    def _frontend_url_with(self, **params: str) -> str:
-        """프론트 주소에 쿼리 파라미터를 붙인다."""
-        separator = "&" if "?" in self._frontend_url else "?"
-        return f"{self._frontend_url}{separator}{urlencode(params)}"
+
+def _with_query(url: str, **params: str) -> str:
+    """프론트 주소에 쿼리 파라미터를 붙인다."""
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{urlencode(params)}"
 
 
 class UserService:
@@ -249,6 +303,7 @@ def build_providers(settings: Settings, client: httpx.Client) -> dict[str, OAuth
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,
             redirect_uri=settings.google_redirect_uri,
+            withdraw_redirect_uri=settings.google_withdraw_redirect_uri,
         )
         providers[GoogleOAuth.name] = GoogleOAuth(google, client)
     return providers
@@ -279,7 +334,9 @@ def get_auth_service(
         users=UserRepository(session),
         issuer=issuer,
         login_codes=LoginCodeStore(get_redis()),
+        withdraw_states=WithdrawStateStore(get_redis()),
         frontend_url=settings.frontend_login_redirect_url,
+        withdraw_frontend_url=settings.frontend_withdraw_redirect_url,
     )
 
 

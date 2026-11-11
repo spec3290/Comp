@@ -1,5 +1,5 @@
 """인증 API: 소셜 로그인 (F1-6, 콜백은 프론트로 리다이렉트 Q-16), 토큰 재발급 (F1-4),
-로그아웃 (F1-5), 내 정보·프로필 (F1-7)."""
+로그아웃 (F1-5), 내 정보·프로필 (F1-7), 탈퇴 (F1-8, 재인증 후 리다이렉트 Q-25)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,18 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth.schemas import LoginCodeIn, LoginOut, ProfileIn, RefreshIn, TokenOut, UserOut
+from app.auth.schemas import (
+    LoginCodeIn,
+    LoginOut,
+    ProfileIn,
+    RefreshIn,
+    TokenOut,
+    UserOut,
+    WithdrawalOut,
+)
 from app.auth.service import (
     LOGIN_FAILURES,
+    WITHDRAW_FAILURES,
     AuthService,
     CurrentToken,
     UserService,
@@ -67,6 +76,27 @@ def callback(
     return response
 
 
+@router.get("/{provider}/withdraw/callback", status_code=302, response_class=RedirectResponse)
+def withdraw_callback(
+    provider: str,
+    service: Service,
+    code: str | None = None,
+    state: str | None = None,
+) -> RedirectResponse:
+    """탈퇴 재인증에서 돌아온 브라우저를 프론트로 보낸다.
+
+    성공은 `?withdrawn=true`, 실패는 `?error=OAUTH_UNAVAILABLE` 같은 에러 코드이고 실패하면
+    회원은 그대로 남는다 (Q-7).
+    """
+    try:
+        url = service.complete_withdrawal(provider, code, state)
+    except WITHDRAW_FAILURES as exc:
+        url = service.failed_withdrawal_url(exc.code)
+    response = RedirectResponse(url, status_code=302)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @router.post("/token", response_model=LoginOut)
 def exchange_login_code(body: LoginCodeIn, response: Response, service: Service) -> LoginOut:
     """콜백이 프론트로 넘긴 `login_code` 를 토큰으로 바꾼다.
@@ -103,3 +133,9 @@ def me(token: CurrentToken, users: Users) -> UserOut:
 def update_profile(body: ProfileIn, token: CurrentToken, users: Users) -> UserOut:
     """온보딩·프로필 수정. 닉네임이 다른 회원과 겹치면 409 `NICKNAME_TAKEN`."""
     return UserOut.from_user(users.update_profile(token.user_id, body.to_input()))
+
+
+@users_router.post("/me/withdrawal", response_model=WithdrawalOut)
+def start_withdrawal(token: CurrentToken, service: Service) -> WithdrawalOut:
+    """탈퇴를 시작한다. 프론트는 받은 주소로 브라우저를 보내 제공자 재인증을 거친다."""
+    return WithdrawalOut(redirect_url=service.start_withdrawal(token.user_id))

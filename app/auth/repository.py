@@ -7,6 +7,8 @@ Refresh Token 은 `refresh:{jti}` 해시에 user_id·family_id 를 담고, 만�
 회전한 토큰은 지우지 않고 `rotated` 표시만 남겨 만료 때까지 재사용을 탐지한다.
 로그아웃한 Access 는 `blacklist:{jti}` 에 남은 만료 시간만큼만 둔다 (F1-5).
 소셜 로그인 콜백이 프론트로 넘기는 일회용 코드는 `login_code:{code}` 에 짧게 둔다 (Q-16).
+회원의 로그인 세션 목록은 `user_families:{user_id}` 에 모아 탈퇴(F1-8) 때 전부 폐기하고,
+탈퇴 재인증 state 는 `withdraw_state:{state}` 에 회원 id 와 묶어 둔다 (Q-25).
 """
 
 from __future__ import annotations
@@ -95,6 +97,11 @@ class UserRepository:
             self._session.rollback()
             raise NicknameConflictError(nickname) from exc
 
+    def delete(self, user: User) -> None:
+        """회원을 지운다. 관심 분야·북마크는 외래 키 ON DELETE CASCADE 로 함께 지워진다."""
+        self._session.delete(user)
+        self._session.commit()
+
 
 def _refresh_key(jti: str) -> str:
     """Refresh Token 레코드의 Redis 키."""
@@ -121,6 +128,16 @@ def _login_code_key(code: str) -> str:
     return f"login_code:{code}"
 
 
+def _user_families_key(user_id: int) -> str:
+    """회원의 로그인 세션(family) 목록의 Redis 키."""
+    return f"user_families:{user_id}"
+
+
+def _withdraw_state_key(state: str) -> str:
+    """탈퇴 재인증 state 의 Redis 키."""
+    return f"withdraw_state:{state}"
+
+
 @dataclass(frozen=True)
 class RefreshRecord:
     """Refresh Token 을 소비한 결과."""
@@ -144,6 +161,7 @@ class TokenStore:
         폐기해도 폐기된 family 에 새 토큰이 살아남지 않는다.
         """
         key, family, revoked = _refresh_key(jti), _family_key(family_id), _revoked_key(family_id)
+        user_families = _user_families_key(user_id)
         saved: list[bool] = []
 
         def write(pipe: Pipeline) -> None:
@@ -157,6 +175,8 @@ class TokenStore:
             pipe.expire(key, ttl)
             pipe.sadd(family, jti)
             pipe.expire(family, ttl)  # family 의 가장 최근 토큰과 같이 만료된다
+            pipe.sadd(user_families, family_id)
+            pipe.expire(user_families, ttl)  # 회원의 가장 최근 토큰과 같이 만료된다
             saved.append(True)
 
         self._redis.transaction(write, revoked)
@@ -212,6 +232,16 @@ class TokenStore:
         if remaining_ms > 0:
             self._redis.set(_blacklist_key(jti), "1", px=remaining_ms + 1000)
 
+    def revoke_user(self, user_id: int, ttl: timedelta) -> None:
+        """회원의 모든 로그인 세션을 폐기한다 (탈퇴). 이후 그 세션의 Access·Refresh 는 거절된다.
+
+        회원 id 대신 세션 단위로 막아서, id 를 다시 쓰는 DB 에서도 새 회원이 막히지 않는다.
+        """
+        user_families = _user_families_key(user_id)
+        for family_id in self._redis.smembers(user_families):
+            self.revoke_family(str(family_id), ttl)
+        self._redis.delete(user_families)
+
     def is_access_revoked(self, jti: str, family_id: str) -> bool:
         """이 Access 가 블랙리스트에 있거나 세션(family)이 폐기됐다. 한 번의 EXISTS 로 본다.
 
@@ -237,4 +267,25 @@ class LoginCodeStore:
         GETDEL 한 번으로 읽고 지우므로 같은 코드로 동시에 교환해도 한 요청만 성공한다.
         """
         value = self._redis.getdel(_login_code_key(code))
+        return int(value) if isinstance(value, str) else None
+
+
+class WithdrawStateStore:
+    """탈퇴 재인증의 state 를 회원과 묶어 둔다 (Q-25). state 하나는 한 번만 쓸 수 있다.
+
+    로그인과 달리 쿠키가 아니라 서버에 두는 것은, 탈퇴 시작이 Bearer 를 실은 API 호출이라
+    브라우저 쿠키를 심을 수 없기 때문이다. 콜백은 state 로 탈퇴를 요청한 회원을 찾는다.
+    """
+
+    def __init__(self, redis: Redis) -> None:
+        """Redis 클라이언트를 받는다."""
+        self._redis = redis
+
+    def save(self, state: str, user_id: int, ttl: timedelta) -> None:
+        """state 를 회원 ID 와 묶어 TTL 동안 저장한다."""
+        self._redis.set(_withdraw_state_key(state), str(user_id), ex=ttl)
+
+    def consume(self, state: str) -> int | None:
+        """state 를 지우면서 회원 id 를 돌려준다. 없거나 만료됐거나 이미 썼으면 None."""
+        value = self._redis.getdel(_withdraw_state_key(state))
         return int(value) if isinstance(value, str) else None

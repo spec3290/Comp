@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.models import User
-from app.auth.oauth import OAuthFailedError, OAuthIdentity, OAuthUnavailableError
+from app.auth.oauth import OAuthFailedError, OAuthGrant, OAuthIdentity, OAuthUnavailableError
 from app.auth.tokens import JWT_ALGORITHM
 
 SECRET = "test-secret-at-least-32-bytes-long!!"
@@ -20,6 +20,7 @@ REFRESH_TTL = timedelta(days=14)
 CODES = {"code-a": "google-sub-a", "code-b": "google-sub-b"}
 OUTAGE_CODE = "outage"  # FakeProvider 가 제공자 장애로 응답하는 코드
 FRONTEND_URL = "http://frontend.test/auth/callback"
+WITHDRAW_FRONTEND_URL = "http://frontend.test/withdraw/callback"
 
 
 class HttpResponse(Protocol):
@@ -50,6 +51,8 @@ class FakeProvider:
         """인가 코드와 제공자 ID 대응표를 받는다."""
         self.codes = codes
         self.redirect_uri = redirect_uri
+        self.revoked: list[str] = []  # 연결 해제한 제공자 토큰
+        self.revoke_error: Exception | None = None  # 지정하면 연결 해제가 이 예외로 실패한다
 
     def authorization_url(self, state: str) -> str:
         """state 를 실은 가짜 로그인 주소."""
@@ -62,6 +65,20 @@ class FakeProvider:
         if code not in self.codes:
             raise OAuthFailedError("Google 로그인에 실패했습니다.")
         return OAuthIdentity(provider=self.name, provider_id=self.codes[code])
+
+    def withdraw_authorization_url(self, state: str) -> str:
+        """state 를 실은 가짜 탈퇴 재인증 주소."""
+        return f"https://accounts.example.com/auth?prompt=select_account&state={state}"
+
+    def exchange_withdraw_code(self, code: str) -> OAuthGrant:
+        """로그인과 같은 표로 식별자를 찾고 코드에서 이름 붙인 제공자 토큰을 준다."""
+        return OAuthGrant(self.exchange_code(code), access_token=f"provider-token-{code}")
+
+    def revoke(self, access_token: str) -> None:
+        """연결 해제를 기록한다. revoke_error 가 있으면 실패한다."""
+        if self.revoke_error is not None:
+            raise self.revoke_error
+        self.revoked.append(access_token)
 
 
 def start_state(client: TestClient) -> str:

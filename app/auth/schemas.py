@@ -114,3 +114,9 @@ class UserOut(BaseModel):
             needs_onboarding=user.needs_onboarding,
             created_at=user.created_at,
         )
+
+
+class WithdrawalOut(BaseModel):
+    """탈퇴 시작 응답 (F1-8). 프론트가 브라우저를 보낼 제공자 재인증 주소."""
+
+    redirect_url: str

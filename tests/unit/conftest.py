@@ -1,16 +1,17 @@
 """인증 테스트 fixture. PostgreSQL 은 메모리 SQLite, Redis 는 fakeredis 로 바꾼다."""
 
 from collections.abc import Iterator
+from typing import Any
 
 import fakeredis
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.auth.repository import LoginCodeStore, TokenStore, UserRepository
+from app.auth.repository import LoginCodeStore, TokenStore, UserRepository, WithdrawStateStore
 from app.auth.service import (
     AuthService,
     CurrentToken,
@@ -29,20 +30,33 @@ from tests.unit.auth_support import (
     FRONTEND_URL,
     REFRESH_TTL,
     SECRET,
+    WITHDRAW_FRONTEND_URL,
     FakeProvider,
 )
 
 
 @pytest.fixture
 def session() -> Iterator[Session]:
-    """메모리 SQLite 로 만든 세션."""
+    """메모리 SQLite 로 만든 세션. 탈퇴(F1-8)의 ON DELETE CASCADE 를 위해 외래 키를 켠다."""
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
+    event.listen(engine, "connect", _enable_foreign_keys)
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as s:
         yield s
     engine.dispose()
+
+
+def _enable_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
+    """SQLite 는 연결마다 외래 키 검사를 켜야 PostgreSQL 처럼 CASCADE 가 동작한다."""
+    dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+
+@pytest.fixture
+def provider() -> FakeProvider:
+    """테스트마다 새로 만드는 가짜 Google. 연결 해제 기록을 테스트에서 본다."""
+    return FakeProvider(CODES)
 
 
 @pytest.fixture
@@ -59,15 +73,17 @@ def issuer(redis: fakeredis.FakeRedis) -> TokenIssuer:
 
 @pytest.fixture
 def client(
-    session: Session, redis: fakeredis.FakeRedis, issuer: TokenIssuer
+    session: Session, redis: fakeredis.FakeRedis, issuer: TokenIssuer, provider: FakeProvider
 ) -> Iterator[TestClient]:
     """가짜 제공자와 테스트 의존성을 끼운 API 클라이언트."""
     service = AuthService(
-        providers={"google": FakeProvider(CODES)},
+        providers={"google": provider},
         users=UserRepository(session),
         issuer=issuer,
         login_codes=LoginCodeStore(redis),
+        withdraw_states=WithdrawStateStore(redis),
         frontend_url=FRONTEND_URL,
+        withdraw_frontend_url=WITHDRAW_FRONTEND_URL,
     )
     app.dependency_overrides[get_auth_service] = lambda: service
     app.dependency_overrides[get_token_issuer] = lambda: issuer

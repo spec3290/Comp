@@ -18,6 +18,7 @@ CONFIG = GoogleConfig(
     client_id="client-id",
     client_secret="client-secret",
     redirect_uri="http://localhost:8000/auth/google/callback",
+    withdraw_redirect_uri="http://localhost:8000/auth/google/withdraw/callback",
 )
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -113,3 +114,65 @@ def test_network_error_raises_unavailable() -> None:
 
     with pytest.raises(OAuthUnavailableError):
         _google(handler).exchange_code("auth-code")
+
+
+@pytest.mark.feature("F1-8")
+def test_withdraw_authorization_url_uses_withdraw_callback_and_account_selection() -> None:
+    """탈퇴 재인증 주소는 탈퇴 콜백으로 돌아오고 계정 선택을 다시 거친다."""
+    params = parse_qs(urlsplit(_google(_ok).withdraw_authorization_url("state-w")).query)
+
+    assert params["redirect_uri"] == [CONFIG.withdraw_redirect_uri]
+    assert params["prompt"] == ["select_account"]
+    assert params["state"] == ["state-w"]
+
+
+@pytest.mark.feature("F1-8")
+def test_exchange_withdraw_code_returns_identity_and_hidden_access_token() -> None:
+    """탈퇴 코드는 탈퇴 콜백 주소로 교환하고, 받은 토큰은 repr 에 드러나지 않는다."""
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """보낸 요청을 기록하고 정상 응답한다."""
+        sent.append(request)
+        return _ok(request)
+
+    grant = _google(handler).exchange_withdraw_code("auth-code")
+
+    assert grant.identity == OAuthIdentity(provider="google", provider_id="1234567890")
+    assert grant.access_token == "google-at"
+    assert "google-at" not in repr(grant)
+    assert parse_qs(sent[0].content.decode())["redirect_uri"] == [CONFIG.withdraw_redirect_uri]
+
+
+@pytest.mark.feature("F1-8")
+def test_revoke_posts_token_to_google_revoke_endpoint() -> None:
+    """연결 해제는 토큰을 revoke 엔드포인트에 폼으로 보낸다. 빈 본문 성공도 받는다."""
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """보낸 요청을 기록하고 본문 없이 성공한다."""
+        sent.append(request)
+        return httpx.Response(200)
+
+    _google(handler).revoke("google-at")
+
+    assert sent[0].method == "POST"
+    assert sent[0].url == GoogleOAuth.REVOKE_URL
+    assert parse_qs(sent[0].content.decode()) == {"token": ["google-at"]}
+
+
+@pytest.mark.feature("F1-8")
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (httpx.Response(400, json={"error": "invalid_token"}), OAuthFailedError),
+        (httpx.Response(503), OAuthUnavailableError),
+    ],
+    ids=["rejected", "server-error"],
+)
+def test_revoke_failure_raises_domain_error(
+    response: httpx.Response, error: type[Exception]
+) -> None:
+    """연결 해제 실패는 도메인 예외라 탈퇴를 멈출 수 있다 (Q-7)."""
+    with pytest.raises(error):
+        _google(lambda _: response).revoke("google-at")

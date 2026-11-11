@@ -18,5 +18,9 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    # 탈퇴 재인증 콜백 (F1-8, Q-25). Google 콘솔에 로그인 콜백과 함께 등록한다
+    google_withdraw_redirect_uri: str = "http://localhost:8000/auth/google/withdraw/callback"
     # 소셜 로그인 콜백이 끝나면 브라우저를 보낼 프론트 주소 (Q-16)
     frontend_login_redirect_url: str = "http://localhost:5173/auth/callback"
+    # 탈퇴 재인증 콜백이 끝나면 브라우저를 보낼 프론트 주소 (Q-25)
+    frontend_withdraw_redirect_url: str = "http://localhost:5173/withdraw/callback"
