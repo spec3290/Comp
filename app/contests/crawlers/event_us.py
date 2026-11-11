@@ -66,8 +66,7 @@ class EventUsSource:
 
     def fetch(self) -> list[RawContest]:
         """검색어별 결과를 합쳐 IT 대회만 RawContest 로 바꾼다."""
-        items = [item for item in self._search_all() if _is_it_contest(item)]
-        return convert_each(items, self._to_contest, NAME)
+        return convert_each(self._search_all(), self._to_contest, NAME)
 
     def _search_all(self) -> list[dict[str, Any]]:
         """모든 검색어의 첫 페이지를 가져와 행사 id 로 중복을 없앤다."""
@@ -85,6 +84,9 @@ class EventUsSource:
 
     def _to_contest(self, item: dict[str, Any]) -> RawContest | None:
         """행사 한 건을 RawContest 로 바꾼다. 공식 참가 URL 을 못 찾으면 None (Q-20)."""
+        # 필터도 convert_each 의 항목별 오류 격리 안에서 돌려 깨진 항목 하나가 소스를 막지 않게 한다
+        if not _is_it_contest(item):
+            return None
         page_url = EVENT_URL.format(subdomain=item["subdomain"], event_id=item["id"])
         apply_url = self._apply_url(item["reception_type"], page_url)
         if apply_url is None:

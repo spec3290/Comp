@@ -67,6 +67,9 @@ def test_event_us_keeps_only_it_contests_and_converts_dates_to_kst() -> None:
         _event(2, event_type="강연/세미나"),
         _event(3, category="예술"),
         {"id": {"raw": "4"}, "broken": {"raw": True}},
+        # 유형·분야는 맞지만 태그가 깨진 항목은 그 항목만 건너뛴다
+        _event(6, tags=[None]),
+        _event(7, title=None),
         # 대회/공모전으로 올린 교육 과정 광고는 형식 단어가 없어 뺀다
         _event(5, title="자바 풀스택 개발자 국비지원 과정", tags=["자바", "국비지원"]),
     ]

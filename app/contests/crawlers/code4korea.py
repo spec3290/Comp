@@ -12,6 +12,7 @@ import io
 import re
 from datetime import date
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -20,6 +21,9 @@ from app.contests.crawlers.base import RawContest, convert_each, looks_like_cont
 NAME = "code4korea"
 SHEET_ID = "1KMB44o1X3UrHKQarL-C6gE75-_jgobz8-ySizAX2s8U"
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export"
+# 홈페이지는 여러 줄이 같이 쓸 수 있어 원문 식별자(source_url)는 목록 페이지 + 행사 이름으로 만든다.
+# 저장소가 source + source_url 을 같은 대회로 보므로 홈페이지를 쓰면 다른 대회를 덮어쓸 수 있다.
+LIST_URL = "https://code4korea.org/"
 COL_NAME = "행사 이름"
 COL_DATE = "행사 일시"
 COL_TOPIC = "행사 주제"
@@ -82,5 +86,5 @@ def _to_contest(row: dict[str, Any]) -> RawContest | None:
         event_end=None,
         apply_url=url,
         source=NAME,
-        source_url=url,
+        source_url=f"{LIST_URL}#{quote(name)}",
     )

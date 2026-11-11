@@ -61,7 +61,7 @@ def test_code4korea_keeps_contests_and_uses_event_date_as_deadline() -> None:
     assert contest.apply_start is None
     assert contest.apply_end == date(2026, 11, 9)
     assert (contest.event_start, contest.event_end) == (None, None)
-    assert contest.apply_url == contest.source_url == "https://a.kr/1"
+    assert contest.apply_url == "https://a.kr/1"
     # 시트처럼 scheme 이 빠진 주소에는 https 를 붙인다
     assert contests[1].apply_url == "https://c.kr/x"
 
@@ -97,3 +97,24 @@ def test_code4korea_http_error_raises() -> None:
     """HTTP 오류는 예외로 올린다."""
     with pytest.raises(httpx.HTTPStatusError):
         _source("", status=500).fetch()
+
+
+@pytest.mark.feature("F2-1")
+def test_code4korea_contests_sharing_homepage_get_distinct_source_urls() -> None:
+    """홈페이지가 같은 두 대회도 원문 식별자가 달라 서로 덮어쓰지 않는다."""
+    text = _sheet(
+        [
+            _row(
+                "블록체인 해커톤 (예선)", "2026. 11. 1 오전 9:00:00", "해커톤", "https://hack.kr/"
+            ),
+            _row(
+                "블록체인 해커톤 (본선)", "2026. 11. 6 오전 9:00:00", "해커톤", "https://hack.kr/"
+            ),
+        ]
+    )
+
+    contests = _source(text).fetch()
+
+    assert [c.apply_url for c in contests] == ["https://hack.kr/", "https://hack.kr/"]
+    assert len({c.source_url for c in contests}) == 2
+    assert all(c.source_url.startswith("https://code4korea.org/#") for c in contests)
