@@ -30,8 +30,12 @@
 - 정확성: 이벤터스 UTC 시각은 `astimezone(KST)`로 날짜를 낸다(테스트: 2026-10-31T15:00Z → 11-01). naive datetime 없음. 코드포코리아는 시트 문자열에서 날짜만 읽는다. 상세 페이지 실패는 그 대회만 건너뛰고(테스트), 검색 페이지·시트 HTTP 오류와 구조 변경은 예외로 올려 서비스가 기존 데이터를 유지한다.
 - 보안: 비밀 값 없음(공개 시트 ID만 상수). 사이트가 봇을 막는 경우 우회하지 않음. robots.txt 확인(event-us `/search`·행사 페이지 허용, docs.google.com `/spreadsheet` 허용). 참가 URL은 `html.unescape`만 하고 `http(s)://` 링크만 받는다.
 - 주석: 새 모듈·클래스·함수·테스트 모두 한 줄 docstring, 근거가 필요한 곳(Q-14·Q-20·Q-25·Q-26)만 줄을 늘림.
-- 테스트: `test_event_us_crawler.py` 9개(유형·분야·형식 단어 필터, KST 변환, 검색어 간 중복 제거, 외부 신청 링크/없음/상세 실패, 빈 결과 null·리다이렉트, 구조 변경, HTTP 오류), `test_code4korea_crawler.py` 11개(대회 필터 경계 8, 마감일 해석·scheme 보정·홈페이지 없음·날짜 깨짐, 열 누락, HTTP 오류). 모두 `@pytest.mark.feature("F2-1")`, `MockTransport`로 네트워크 호출 없음. 실사이트 수동 확인: 이벤터스 4건, 코드포코리아 25건 파싱(DB 저장 없이).
+- 테스트: `test_event_us_crawler.py` 9개(유형·분야·형식 단어 필터, KST 변환, 검색어 간 중복 제거, 외부 신청 링크/없음/상세 실패, 빈 결과 null·리다이렉트, 구조 변경, HTTP 오류), `test_code4korea_crawler.py` 12개(대회 필터 경계 8, 마감일 해석·scheme 보정·홈페이지 없음·날짜 깨짐, 열 누락, HTTP 오류). 모두 `@pytest.mark.feature("F2-1")`, `MockTransport`로 네트워크 호출 없음. 실사이트 수동 확인: 이벤터스 4건, 코드포코리아 25건 파싱(DB 저장 없이).
 - Git 규약: 이슈 #40, 브랜치 `feature/40_eventus-code4korea`, 커밋 `⚡`/`📝`, PR 제목 `🔀 :: (#40) ...`.
+
+### CodeRabbit 리뷰 반영 (2026-11-12)
+1. `code4korea.py` — `source_url`을 홈페이지로 두면 홈페이지가 같은 두 대회가 `ContestRepository._rekey()`에서 같은 대회로 묶여 한쪽이 덮어써진다(현재 시트에는 겹치는 홈페이지가 없지만 막는 장치가 없다). → `source_url`을 `https://code4korea.org/#{행사 이름}`으로 바꾸고 참가 URL은 홈페이지로 유지. 회귀 테스트 `test_code4korea_contests_sharing_homepage_get_distinct_source_urls` 추가, Q-26에 반영. **반영**
+2. `event_us.py` — 유형·분야 필터가 `convert_each()` 밖에서 돌아 `tags: [null]` 같은 항목 하나가 `TypeError`로 소스 전체를 실패시킨다. → 필터를 `_to_contest()` 처음으로 옮겨 항목별 오류 격리 안에서 돌린다. 깨진 태그·제목 항목을 정상 항목과 함께 넣은 테스트 추가. **반영**
 
 ### 실행한 검사
 | 검사 | 결과 |
@@ -40,4 +44,4 @@
 | `uv run ruff check .` | 통과 |
 | `uv run mypy` | 통과 (62 source files) |
 | `uv run lint-imports` | 통과 (3 kept, 0 broken) |
-| `uv run pytest -q` | 261 passed, 16 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI에서 실행) |
+| `uv run pytest -q` | 262 passed (리뷰 반영 후), 16 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI에서 실행) |
