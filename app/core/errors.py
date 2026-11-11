@@ -47,6 +47,13 @@ class ContestClosedError(AppError):
     code = "CONTEST_CLOSED"
 
 
+class ApplyUrlMissingError(AppError):
+    """참가 링크를 못 가져온 대회의 바로가기 (409, Q-29)."""
+
+    status_code = 409
+    code = "APPLY_URL_MISSING"
+
+
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     """ADR-0004 단일 에러 포맷으로 JSON 응답을 만든다."""
     return JSONResponse(

@@ -35,7 +35,7 @@ class ContestSummaryOut(BaseModel):
     apply_end: date
     event_start: date | None
     event_end: date | None
-    apply_url: str
+    apply_url: str | None  # null 이면 프론트가 '직접 검색해서 찾아 주세요' 안내를 띄운다 (Q-29)
     source_url: str
     tags: ContestTagsOut
     tag_check_needed: bool
@@ -75,6 +75,12 @@ class ContestDetailOut(ContestSummaryOut):
             **summary.model_dump(),
             sources=list(view.record.sources),
         )
+
+
+class ApplyLinkOut(BaseModel):
+    """참가 바로가기 응답 (F2-5). 프론트가 이 주소를 새 창으로 연다."""
+
+    apply_url: str
 
 
 class ContestPageOut(BaseModel):

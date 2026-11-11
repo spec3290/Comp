@@ -1,6 +1,6 @@
-"""대회 API: 목록 (F2-3, 분야·형식 필터 F3-3), 상세 (F2-4), 저장 (F2-7).
+"""대회 API: 목록 (F2-3, 분야·형식 필터 F3-3), 상세 (F2-4), 참가 바로가기 (F2-5), 저장 (F2-7).
 
-목록·상세는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
+목록·상세·바로가기는 인증이 선택이고 (ADR-0004), 저장은 Access 토큰이 필요하다.
 목록의 `interests=true` 는 로그인 회원의 프로필 관심 분야로 분야를 거른다. 기본 목록에는
 관심 분야를 적용하지 않는다 (Q-24).
 """
@@ -25,10 +25,12 @@ from app.contests.rules import (
     ContestTags,
     SortOrder,
 )
-from app.contests.schemas import BookmarkPageOut, ContestDetailOut, ContestPageOut
+from app.contests.schemas import ApplyLinkOut, BookmarkPageOut, ContestDetailOut, ContestPageOut
 from app.contests.service import (
+    ApplyService,
     BookmarkService,
     ContestQueryService,
+    get_apply_service,
     get_bookmark_service,
     get_query_service,
 )
@@ -43,6 +45,7 @@ DEFAULT_PAGE_SIZE = 20
 
 Service = Annotated[ContestQueryService, Depends(get_query_service)]
 Bookmarks = Annotated[BookmarkService, Depends(get_bookmark_service)]
+Apply = Annotated[ApplyService, Depends(get_apply_service)]
 Users = Annotated[UserService, Depends(get_user_service)]
 
 
@@ -132,6 +135,14 @@ def list_contests(
 def get_contest(contest_id: str, service: Service, today: Today) -> ContestDetailOut:
     """대회 상세를 돌려준다."""
     return ContestDetailOut.from_view(service.get_contest(contest_id, today))
+
+
+@router.post("/{contest_id}/clicks", response_model=ApplyLinkOut)
+def click_apply_link(
+    contest_id: str, user_id: OptionalUserId, service: Apply, today: Today
+) -> ApplyLinkOut:
+    """참가 바로가기 클릭을 기록하고 공식 참가 URL 을 돌려준다."""
+    return ApplyLinkOut(apply_url=service.click(contest_id, user_id, today, now_kst()))
 
 
 @router.put("/{contest_id}/bookmark", status_code=status.HTTP_204_NO_CONTENT)

@@ -108,12 +108,13 @@ def test_event_us_merges_queries_without_duplicates() -> None:
 
 
 @pytest.mark.feature("F2-1")
-def test_event_us_uses_external_apply_link_and_skips_contests_without_one() -> None:
-    """외부 접수 행사는 상세 페이지의 외부 신청 링크를 쓰고, 링크가 없으면 건너뛴다 (Q-20)."""
+@pytest.mark.feature("F2-5")
+def test_event_us_uses_external_apply_link_and_keeps_contests_without_one() -> None:
+    """외부 접수 행사는 상세 페이지의 신청 링크를 쓰고, 링크가 없어도 링크 없이 남긴다 (Q-29)."""
     events = [
         _event(1, reception_type="external", subdomain="a"),
         _event(2, reception_type="external", subdomain="b"),
-        _event(3, reception_type="donotuse"),
+        _event(3, reception_type="donotuse", subdomain="c"),
     ]
     details = {
         "/a/event/1": _detail_page("https://forms.gle/abc?x=1&amp;y=2"),
@@ -129,14 +130,20 @@ def test_event_us_uses_external_apply_link_and_skips_contests_without_one() -> N
 
     contests = _source(handler).fetch()
 
-    assert len(contests) == 1
-    assert contests[0].apply_url == "https://forms.gle/abc?x=1&y=2"
-    assert contests[0].source_url == "https://event-us.kr/a/event/1"
+    assert [(c.source_url, c.apply_url) for c in contests] == [
+        ("https://event-us.kr/a/event/1", "https://forms.gle/abc?x=1&y=2"),
+        ("https://event-us.kr/b/event/2", None),
+        ("https://event-us.kr/c/event/3", None),
+    ]
 
 
 @pytest.mark.feature("F2-1")
-def test_event_us_skips_contest_when_detail_page_fails() -> None:
-    """상세 페이지 요청이 실패한 행사만 건너뛰고 수집은 이어 간다."""
+@pytest.mark.feature("F2-5")
+def test_event_us_keeps_contest_without_link_when_detail_page_fails() -> None:
+    """상세 페이지 요청이 실패해도 수집은 이어 가고, 그 행사는 링크 없이 남긴다.
+
+    저장소는 링크 없는 값으로 이미 저장된 링크를 지우지 않는다 (Q-29).
+    """
     events = [_event(1, reception_type="external"), _event(2)]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -148,7 +155,10 @@ def test_event_us_skips_contest_when_detail_page_fails() -> None:
 
     contests = _source(handler).fetch()
 
-    assert [c.source_url for c in contests] == ["https://event-us.kr/host/event/2"]
+    assert [(c.source_url, c.apply_url) for c in contests] == [
+        ("https://event-us.kr/host/event/1", None),
+        ("https://event-us.kr/host/event/2", "https://event-us.kr/host/event/2"),
+    ]
 
 
 @pytest.mark.feature("F2-1")

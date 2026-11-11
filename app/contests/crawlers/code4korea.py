@@ -71,11 +71,10 @@ def parse_date(text: str) -> date:
 
 
 def _to_contest(row: dict[str, Any]) -> RawContest | None:
-    """대회이고 홈페이지가 있는 줄만 RawContest 로 바꾼다 (Q-20)."""
+    """대회인 줄만 RawContest 로 바꾼다. 홈페이지가 없으면 링크 없이 남긴다 (Q-29)."""
     name, topic, homepage = row[COL_NAME].strip(), row[COL_TOPIC].strip(), row[COL_HOMEPAGE].strip()
-    if not homepage or not looks_like_contest(name, topic):
+    if not looks_like_contest(name, topic):
         return None
-    url = homepage if homepage.startswith(("http://", "https://")) else f"https://{homepage}"
     return RawContest(
         title=name,
         host="",
@@ -84,7 +83,14 @@ def _to_contest(row: dict[str, Any]) -> RawContest | None:
         apply_end=parse_date(row[COL_DATE]),
         event_start=None,
         event_end=None,
-        apply_url=url,
+        apply_url=_homepage_url(homepage),
         source=NAME,
         source_url=f"{LIST_URL}#{quote(name)}",
     )
+
+
+def _homepage_url(homepage: str) -> str | None:
+    """시트 홈페이지 칸을 링크로 바꾼다. 비어 있으면 None, scheme 이 빠졌으면 https 를 붙인다."""
+    if not homepage:
+        return None
+    return homepage if homepage.startswith(("http://", "https://")) else f"https://{homepage}"
