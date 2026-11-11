@@ -230,6 +230,12 @@ class BookmarkService:
             raise ContestClosedError("접수가 마감된 대회는 저장할 수 없습니다.")
         self._bookmarks.add(user_id, contest_id, now)
 
+    def is_bookmarked(self, user_id: int | None, contest_id: str) -> bool | None:
+        """상세에 보여 줄 저장 여부. 비로그인이면 알 수 없어 None 이다 (Q-29)."""
+        if user_id is None:
+            return None
+        return self._bookmarks.exists(user_id, contest_id)
+
     def remove(self, user_id: int, contest_id: str) -> None:
         """저장하지 않았거나 이미 삭제된 대회여도 성공으로 본다 (멱등)."""
         self._bookmarks.remove(user_id, contest_id)

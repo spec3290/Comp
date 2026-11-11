@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
+from app.contests.repository import ContestOrigin
 from app.contests.rules import ContestStatus, ContestTags, Dimension
 from app.contests.service import BookmarkPage, BookmarkView, ContestPage, ContestView
 
@@ -62,18 +63,39 @@ class ContestSummaryOut(BaseModel):
         )
 
 
-class ContestDetailOut(ContestSummaryOut):
-    """대회 상세 응답. 수집 출처를 더한다."""
+class ContestSourceOut(BaseModel):
+    """대회를 수집한 사이트와 그 사이트의 원문 링크. 같은 대회를 여러 사이트에서 볼 수 있다."""
 
-    sources: list[str]
+    source: str
+    source_url: str
+    is_representative: bool
 
     @classmethod
-    def from_view(cls, view: ContestView) -> ContestDetailOut:
-        """조회 결과로 응답을 만든다."""
+    def from_origin(cls, origin: ContestOrigin) -> ContestSourceOut:
+        """수집 출처로 응답을 만든다."""
+        return cls(
+            source=origin.source,
+            source_url=origin.source_url,
+            is_representative=origin.representative,
+        )
+
+
+class ContestDetailOut(ContestSummaryOut):
+    """대회 상세 응답. 사이트별 원문 링크·정보 갱신 시각·저장 여부를 더한다 (Q-29)."""
+
+    sources: list[ContestSourceOut]
+    updated_at: datetime
+    bookmarked: bool | None  # 비로그인이면 null
+
+    @classmethod
+    def from_detail(cls, view: ContestView, bookmarked: bool | None) -> ContestDetailOut:
+        """조회 결과와 저장 여부로 응답을 만든다."""
         summary = ContestSummaryOut.from_view(view)
         return cls(
             **summary.model_dump(),
-            sources=list(view.record.sources),
+            sources=[ContestSourceOut.from_origin(o) for o in view.record.sources],
+            updated_at=view.record.updated_at,
+            bookmarked=bookmarked,
         )
 
 

@@ -8,7 +8,7 @@ import pytest
 from pymongo.database import Database
 
 from app.contests.crawlers.base import RawContest
-from app.contests.repository import COLLECTION, ContestRepository, SaveOutcome
+from app.contests.repository import COLLECTION, ContestOrigin, ContestRepository, SaveOutcome
 from app.contests.rules import (
     NO_TAGS,
     ContestQuery,
@@ -131,9 +131,31 @@ def test_get_by_id_and_unknown_ids(seeded: ContestRepository) -> None:
     first, _ = seeded.find(ContestQuery(size=1), TODAY)
     record = seeded.get(first[0].id)
     assert record is not None
-    assert record.sources == ("a",)
+    assert [o.source for o in record.sources] == ["a"]
     assert seeded.get("not-an-object-id") is None
     assert seeded.get("0" * 24) is None
+
+
+@pytest.mark.feature("F2-4")
+def test_get_returns_source_links_with_representative_and_updated_at(
+    mongo_db: Database[Document],
+) -> None:
+    """상세용 대회에는 사이트별 원문 링크·대표 여부와 대표 값의 갱신 시각이 담긴다 (Q-29)."""
+    repo = ContestRepository(mongo_db)
+    _save(repo, _contest("a"))
+    _save(repo, _contest("b"))
+    doc = mongo_db[COLLECTION].find_one({})
+    assert doc is not None
+
+    record = repo.get(str(doc["_id"]))
+
+    assert record is not None
+    assert record.sources == (
+        ContestOrigin("a", "https://a.example.com/2026 AI 해커톤", representative=True),
+        ContestOrigin("b", "https://b.example.com/2026 AI 해커톤", representative=False),
+    )
+    # 대표 소스(a)가 값을 쓴 시각이다. 대표가 아닌 소스의 병합은 이 시각을 바꾸지 않는다.
+    assert record.updated_at == doc["updated_at"]
 
 
 @pytest.mark.feature("F2-7")
