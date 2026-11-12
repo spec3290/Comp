@@ -6,7 +6,7 @@
 
 여러 사이트에 흩어진 대회를 수집·중복 제거·분야·형식 분류해 보여 주는 백엔드.
 스택: Python 3.13+, uv, FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL(메인 DB), MongoDB·pymongo(대회 데이터·벡터), Redis·redis-py(Refresh Token), PyJWT, httpx, pytest. 저장소 분담은 [ADR-0008](docs/decisions.md).
-현재 범위는 **1차 MVP 13개 기능**이다. 2차 이후는 구현하지 않는다.
+현재 범위는 **1차 MVP 14개 기능**이다(F4-1 포함, Q-33). 2차 이후는 구현하지 않는다.
 
 ## 하네스 구성
 
