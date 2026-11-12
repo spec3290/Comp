@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import re
 import tomllib
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 _LEADING_BRACKET = re.compile(r"^\s*\[[^\]]*\]\s*")
 _NON_WORD = re.compile(r"[\W_]+")
@@ -258,13 +259,113 @@ class ContestQuery:
 
 
 def normalize_text(text: str) -> str:
-    """중복 비교용 정규화: 맨 앞 [접두어] 제거, 공백·특수문자 제거, 소문자 (Q-2 기본값)."""
+    """중복 비교용 정규화: 맨 앞 [접두어] 제거, 공백·특수문자 제거, 소문자 (Q-2)."""
     return _NON_WORD.sub("", _LEADING_BRACKET.sub("", text)).lower()
 
 
-def merge_key(title: str, host: str, apply_end: date) -> str:
-    """F2-2 병합 기준: 제목 + 주최 + 마감일."""
-    return f"{normalize_text(title)}|{normalize_text(host)}|{apply_end.isoformat()}"
+# 출처마다 값이 갈리면 앞선 소스의 값을 쓴다 (Q-2). 대회를 직접 여는 플랫폼 > 신청을 받는
+# 플랫폼 > 집계 사이트 순이다. 여기 없는 소스는 맨 뒤(이름순)다.
+SOURCE_PRIORITY = ("dacon", "devpost", "event_us", "dev_event", "code4korea")
+# 한쪽 제목이 다른 쪽을 포함하는지 볼 때, 짧은 쪽이 이보다 짧으면 같은 제목일 때만 같다고 본다.
+# '해커톤' 같은 짧은 제목이 이것저것 포함해 다른 대회를 합치는 것을 막는다.
+MIN_CONTAINED_TITLE = 8
+
+
+@dataclass(frozen=True)
+class Listing:
+    """한 사이트가 올린 대회 하나와 그 분류 태그 (F2-2). 같은 대회의 출처들이 문서 하나로 묶인다."""
+
+    source: str
+    source_url: str  # 그 사이트 안에서 원문을 가리키는 식별자
+    title: str
+    host: str
+    field: str
+    apply_start: date | None
+    apply_end: date
+    event_start: date | None
+    event_end: date | None
+    apply_url: str | None
+    tags: ContestTags = NO_TAGS
+
+
+def source_rank(source: str) -> tuple[int, str]:
+    """값을 고를 때의 소스 순위. 작을수록 앞선다."""
+    if source in SOURCE_PRIORITY:
+        return SOURCE_PRIORITY.index(source), ""
+    return len(SOURCE_PRIORITY), source
+
+
+def url_key(url: str | None) -> str | None:
+    """참가 URL 비교용: 스킴·`www.`·끝 `/`·프래그먼트를 뺀다. 쿼리는 행사 id 일 수 있어 남긴다."""
+    if not url:
+        return None
+    parts = urlsplit(url.strip())
+    host = parts.netloc.lower().removeprefix("www.")
+    if not host:
+        return None
+    query = f"?{parts.query}" if parts.query else ""
+    return f"{host}{parts.path.rstrip('/')}{query}"
+
+
+def titles_overlap(a: str, b: str) -> bool:
+    """정규화한 제목이 같거나, 충분히 긴 한쪽이 다른 쪽에 들어 있다 ('X 해커톤 대회' 등)."""
+    short, long = sorted((normalize_text(a), normalize_text(b)), key=len)
+    if not short:
+        return False
+    return short == long or (len(short) >= MIN_CONTAINED_TITLE and short in long)
+
+
+def same_contest(a: Listing, b: Listing) -> bool:
+    """두 출처가 같은 대회인지 판정한다 (F2-2, Q-2). 주최는 사이트마다 달라 보지 않는다.
+
+    같은 사이트면 원문 식별자가 같을 때만 같다. 다른 사이트면 제목이 겹치고, 공식 참가 URL
+    또는 마감일이 같아야 한다. URL 만으로 합치지 않는 것은 예선·본선이 홈페이지를 같이 쓰기
+    때문이다.
+    """
+    if a.source == b.source:
+        return a.source_url == b.source_url
+    if not titles_overlap(a.title, b.title):
+        return False
+    key = url_key(a.apply_url)
+    return (key is not None and key == url_key(b.apply_url)) or a.apply_end == b.apply_end
+
+
+def belongs_to(listing: Listing, bundle: Sequence[Listing]) -> bool:
+    """출처가 이 묶음의 대회인지. 묶음에는 사이트마다 원문 하나만 들어간다."""
+    same_site = [other for other in bundle if other.source == listing.source]
+    if same_site:
+        return any(other.source_url == listing.source_url for other in same_site)
+    return any(same_contest(listing, other) for other in bundle)
+
+
+def refresh(old: Listing | None, new: Listing) -> Listing:
+    """다시 수집한 출처 값. 참가 링크를 못 찾았으면 전에 찾은 링크를 지우지 않는다 (F2-1, Q-30)."""
+    if old is None or new.apply_url is not None:
+        return new
+    return replace(new, apply_url=old.apply_url)
+
+
+def resolve(bundle: Sequence[Listing]) -> Listing:
+    """묶음에서 보여 줄 값을 고른다 (Q-2). 실행 순서와 상관없이 결과가 같다.
+
+    제목·원문·접수 기간은 우선순위가 가장 높은 출처(대표)의 값이다. 주최·분야 원문·참가 링크·대회
+    기간은 비어 있지 않은 값 중 앞선 출처의 것, 분류 태그는 모든 출처의 합집합이다.
+    """
+    ordered = sorted(bundle, key=lambda listing: source_rank(listing.source))
+    top = ordered[0]
+    event = next((x for x in ordered if x.event_start or x.event_end), top)
+    tags = ContestTags(
+        **{d.value: frozenset().union(*(x.tags.get(d) for x in ordered)) for d in Dimension}
+    )
+    return replace(
+        top,
+        host=next((x.host for x in ordered if x.host), ""),
+        field=next((x.field for x in ordered if x.field), ""),
+        apply_url=next((x.apply_url for x in ordered if x.apply_url), None),
+        event_start=event.event_start,
+        event_end=event.event_end,
+        tags=tags,
+    )
 
 
 def purge_cutoff(today: date) -> date:

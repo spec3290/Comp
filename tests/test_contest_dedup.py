@@ -9,7 +9,6 @@ from datetime import date
 
 import pytest
 from pymongo.database import Database
-from pymongo.errors import DuplicateKeyError
 
 from app.contests.crawlers.base import RawContest
 from app.contests.repository import COLLECTION, ContestRepository, SaveOutcome
@@ -50,11 +49,11 @@ class FakeSource:
         return self._contests
 
 
-# 사이트마다 표기가 조금씩 다른 같은 대회 (제목 접두어·대소문자·공백·특수문자, 주최 공백)
+# 사이트마다 표기가 조금씩 다른 같은 대회 (제목 접두어·대소문자·특수문자, 주최 표기·빈 주최)
 SAME_CONTEST_SOURCES = [
     FakeSource("dev_event", [_contest("dev_event", title="[공모전] 2026 AI 해커톤")]),
-    FakeSource("dacon", [_contest("dacon", title="2026 ai 해커톤", host="주최 사")]),
-    FakeSource("linkareer", [_contest("linkareer", title="2026 AI-해커톤!")]),
+    FakeSource("dacon", [_contest("dacon", title="2026 ai 해커톤", host="데이콘")]),
+    FakeSource("code4korea", [_contest("code4korea", title="2026 AI-해커톤!", host="")]),
 ]
 
 
@@ -70,15 +69,16 @@ def repo(mongo_db: Database[Document]) -> ContestRepository:
 def test_same_contest_from_several_sites_is_stored_once(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    """여러 사이트의 같은 대회가 한 문서로 저장되고 출처가 모두 남는다."""
+    """여러 사이트의 같은 대회가 주최 표기가 달라도 한 문서로 저장되고 출처가 모두 남는다."""
     results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     assert [r.error for r in results] == [None, None, None]
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
-    assert docs[0]["source"] == "dev_event"  # 처음 수집한 소스가 대표 (Q-2)
-    assert docs[0]["title"] == "[공모전] 2026 AI 해커톤"
-    assert [s["source"] for s in docs[0]["sources"]] == ["dev_event", "dacon", "linkareer"]
+    # 수집 순서가 아니라 소스 우선순위로 대표를 고른다 (Q-2)
+    assert docs[0]["source"] == "dacon"
+    assert (docs[0]["title"], docs[0]["host"]) == ("2026 ai 해커톤", "데이콘")
+    assert [s["source"] for s in docs[0]["sources"]] == ["dev_event", "dacon", "code4korea"]
 
 
 @pytest.mark.feature("F2-2")
@@ -91,43 +91,56 @@ def test_recollecting_creates_no_duplicates(
     results = collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
     assert [r.error for r in results] == [None, None, None]
-    # 대표 소스는 값을 갱신하고, 나머지는 출처만 갱신한다. 새로 만든 문서는 없다
-    assert [dict(r.outcomes) for r in results] == [
-        {SaveOutcome.UPDATED: 1},
-        {SaveOutcome.MERGED: 1},
-        {SaveOutcome.MERGED: 1},
-    ]
+    assert [dict(r.outcomes) for r in results] == [{SaveOutcome.UPDATED: 1}] * 3
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
-    assert [s["source"] for s in docs[0]["sources"]] == ["dev_event", "dacon", "linkareer"]
+    assert [s["source"] for s in docs[0]["sources"]] == ["dev_event", "dacon", "code4korea"]
 
 
 @pytest.mark.feature("F2-2")
-def test_contests_differing_in_title_host_or_deadline_are_kept_apart(
+def test_collect_order_does_not_change_shown_values(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    """제목·주최·마감일 중 하나라도 다르면 다른 대회로 저장한다."""
+    """소스를 어떤 순서로 수집해도 보여 주는 값은 같다."""
+    shown = ("title", "host", "source", "apply_end", "apply_url", "tags")
+    collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
+    forward = mongo_db[COLLECTION].find_one({})
+    mongo_db[COLLECTION].delete_many({})
+
+    collect(SAME_CONTEST_SOURCES[::-1], repo, TODAY, RULES)
+    backward = mongo_db[COLLECTION].find_one({})
+
+    assert forward is not None and backward is not None
+    assert {k: forward[k] for k in shown} == {k: backward[k] for k in shown}
+
+
+@pytest.mark.feature("F2-2")
+def test_different_contests_are_kept_apart(
+    mongo_db: Database[Document], repo: ContestRepository
+) -> None:
+    """제목이 겹치지 않거나, 참가 URL 과 마감일이 모두 다르면 다른 대회로 저장한다."""
     base = _contest("dacon")
     contests = [
-        base,
-        replace(base, title="2026 AI 해커톤 본선", source_url="https://dacon.example.com/2"),
-        replace(base, host="다른 주최사", source_url="https://dacon.example.com/3"),
-        replace(base, apply_end=date(2026, 11, 2), source_url="https://dacon.example.com/4"),
+        FakeSource("dacon", [base]),
+        FakeSource("dev_event", [_contest("dev_event", title="2026 보안 해커톤")]),
+        FakeSource("code4korea", [replace(_contest("code4korea"), apply_end=date(2026, 11, 2))]),
     ]
 
-    collect([FakeSource("dacon", contests)], repo, TODAY, RULES)
+    collect(contests, repo, TODAY, RULES)
 
-    assert mongo_db[COLLECTION].count_documents({}) == 4
+    assert mongo_db[COLLECTION].count_documents({}) == 3
 
 
 @pytest.mark.feature("F2-2")
-def test_merge_key_is_unique_in_database(
+def test_dropped_listing_leaves_bundle_after_successful_collect(
     mongo_db: Database[Document], repo: ContestRepository
 ) -> None:
-    """DB 가 병합 키 중복 저장을 막는다."""
-    collect(SAME_CONTEST_SOURCES[:1], repo, TODAY, RULES)
-    doc = mongo_db[COLLECTION].find_one()
-    assert doc is not None
+    """소스가 대회를 내리면 다음 성공한 수집에서 그 출처가 빠지고 남은 출처 값으로 바뀐다."""
+    collect(SAME_CONTEST_SOURCES, repo, TODAY, RULES)
 
-    with pytest.raises(DuplicateKeyError):
-        mongo_db[COLLECTION].insert_one({"merge_key": doc["merge_key"]})
+    collect([FakeSource("dacon", [])], repo, TODAY, RULES)
+
+    doc = mongo_db[COLLECTION].find_one({})
+    assert doc is not None
+    assert [s["source"] for s in doc["sources"]] == ["dev_event", "code4korea"]
+    assert (doc["source"], doc["title"]) == ("dev_event", "[공모전] 2026 AI 해커톤")

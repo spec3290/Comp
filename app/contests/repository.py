@@ -1,19 +1,21 @@
 """대회 저장소 (MongoDB `contests`) + 북마크·클릭 저장소 (PostgreSQL, ADR-0008).
 
 문서 하나가 병합된 대회 하나다. 날짜는 KST 자정 tz-aware datetime 으로 저장한다
-(BSON 에 날짜 전용 타입이 없다). 수집 출처는 `sources` 배열에 쌓고, 처음 수집한 소스가
-대표(`source`)가 되어 값을 갱신한다 (Q-2 기본값). 참가 링크(`apply_url`)는 예외로, 못 찾은
-수집(None)이 저장된 링크를 지우지 않고 대표 소스에 링크가 없으면 다른 소스의 링크로 채운다 (Q-29).
+(BSON 에 날짜 전용 타입이 없다). 사이트별로 수집한 원래 값은 `sources` 배열에 출처마다 두고,
+최상위 값은 저장할 때마다 `rules.resolve` 로 다시 고른다 (Q-2).
+같은 대회 판정은 `rules.same_contest` 다.
 
-동시에 여러 수집이 같은 대회를 저장해도 문서·출처가 겹치지 않게, 갱신은 '확인 후 쓰기'
-대신 조건을 건 단일 연산과 merge_key UNIQUE 인덱스에 맡긴다.
+한 사이트의 원문(source + source_url)은 문서 하나에만 들어가도록 UNIQUE 인덱스가 막는다.
+문서 갱신은 `rev` 를 조건으로 걸어, 그 사이 다른 저장이 문서를 바꿨으면 처음부터 다시 한다.
+수집은 한 번에 하나만 돈다(collect.yml concurrency, 소스는 차례로). 그래도 다른 사이트의 같은
+대회가 동시에 새 문서로 만들어지면, 다음에 그 대회를 저장할 때 한 문서로 합친다.
 """
 
 from __future__ import annotations
 
 import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any
@@ -26,7 +28,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.contests.crawlers.base import RawContest
 from app.contests.models import Bookmark, ContestClick
 from app.contests.rules import (
     NO_TAGS,
@@ -34,25 +35,34 @@ from app.contests.rules import (
     ContestStatus,
     ContestTags,
     Dimension,
+    Listing,
     SortOrder,
+    belongs_to,
+    refresh,
+    resolve,
+    url_key,
 )
 from app.core.db import Document
 from app.core.time import KST
 
 COLLECTION = "contests"
+# 이전 구조(merge_key·대표 소스 고정)의 인덱스. 새 구조로 옮길 때 지운다.
+LEGACY_INDEXES = ("merge_key_1", "source_1_source_url_1")
+# 경합하면 매번 한 저장은 성공하므로, 같은 문서를 동시에 고치는 저장 수보다 넉넉하면 된다
+SAVE_ATTEMPTS = 50
 
 
 class SaveOutcome(StrEnum):
     """대회 저장 결과 종류."""
 
     INSERTED = "inserted"  # 새 대회
-    UPDATED = "updated"  # 대표 소스가 다시 수집해 값을 갱신
-    MERGED = "merged"  # 다른 소스의 같은 대회, 출처만 추가·갱신
+    UPDATED = "updated"  # 이미 있던 출처를 다시 수집
+    MERGED = "merged"  # 다른 사이트가 먼저 올린 같은 대회에 출처로 붙음
 
 
 @dataclass(frozen=True)
 class ContestOrigin:
-    """대회를 수집한 사이트 하나와 그 사이트의 원문 링크. 대표 소스(Q-2)가 값을 정한다."""
+    """대회를 수집한 사이트와 그 사이트의 원문 링크. 대표는 우선순위가 가장 높은 출처 (Q-2)."""
 
     source: str
     source_url: str
@@ -74,7 +84,7 @@ class ContestRecord:
     apply_url: str | None  # 못 가져온 대회는 None (Q-29)
     source_url: str
     sources: tuple[ContestOrigin, ...]
-    updated_at: datetime  # 대표 소스가 마지막으로 값을 쓴 시각 (Q-29)
+    updated_at: datetime  # 보여 주는 값이 바뀌었거나 대표 출처가 다시 수집된 시각 (Q-29)
     tags: ContestTags = NO_TAGS
 
 
@@ -136,18 +146,33 @@ def build_filter(query: ContestQuery, today: date) -> dict[str, Any]:
     return conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
 
-def _fields(contest: RawContest) -> dict[str, Any]:
-    """수집한 대회를 저장할 필드 문서로 바꾼다."""
+class _Conflict(Exception):
+    """읽은 뒤 다른 저장이 문서를 바꿨다. 저장을 처음부터 다시 한다."""
+
+
+def _listing_fields(listing: Listing) -> dict[str, Any]:
+    """출처 값(태그 제외)을 저장할 필드 문서로 바꾼다."""
     return {
-        "title": contest.title,
-        "host": contest.host,
-        "field": contest.field,
-        "apply_start": _to_datetime(contest.apply_start),
-        "apply_end": _to_datetime(contest.apply_end),
-        "event_start": _to_datetime(contest.event_start),
-        "event_end": _to_datetime(contest.event_end),
-        "apply_url": contest.apply_url,
-        "source_url": contest.source_url,
+        "title": listing.title,
+        "host": listing.host,
+        "field": listing.field,
+        "apply_start": _to_datetime(listing.apply_start),
+        "apply_end": _to_datetime(listing.apply_end),
+        "event_start": _to_datetime(listing.event_start),
+        "event_end": _to_datetime(listing.event_end),
+        "apply_url": listing.apply_url,
+        "source_url": listing.source_url,
+    }
+
+
+def _source_doc(listing: Listing, fetched_at: datetime) -> dict[str, Any]:
+    """`sources` 배열 항목. 같은 대회 후보를 찾는 `url_key` 를 함께 둔다."""
+    return {
+        "source": listing.source,
+        **_listing_fields(listing),
+        "url_key": url_key(listing.apply_url),
+        "tags": _tags_doc(listing.tags),
+        "fetched_at": fetched_at,
     }
 
 
@@ -190,6 +215,81 @@ def _to_record(doc: Document) -> ContestRecord:
     )
 
 
+def _to_listing(doc: Document) -> Listing:
+    """`sources` 항목(또는 같은 모양의 문서)을 Listing 으로 바꾼다."""
+    apply_end = _to_date(doc["apply_end"])
+    if apply_end is None:
+        raise ValueError(f"apply_end 가 없는 출처: {doc.get('source')} {doc.get('source_url')}")
+    return Listing(
+        source=doc["source"],
+        source_url=doc["source_url"],
+        title=doc["title"],
+        host=doc["host"],
+        field=doc["field"],
+        apply_start=_to_date(doc.get("apply_start")),
+        apply_end=apply_end,
+        event_start=_to_date(doc.get("event_start")),
+        event_end=_to_date(doc.get("event_end")),
+        apply_url=doc.get("apply_url"),
+        tags=_to_tags(doc.get("tags", {})),
+    )
+
+
+def _top_fields(sources: list[dict[str, Any]]) -> dict[str, Any]:
+    """출처들에서 고른 최상위 값 (목록·상세·필터가 읽는 값)."""
+    shown = resolve([_to_listing(s) for s in sources])
+    return {**_listing_fields(shown), "source": shown.source, "tags": _tags_doc(shown.tags)}
+
+
+def _listings(doc: Document) -> list[Listing]:
+    """문서에 묶인 출처들."""
+    return [_to_listing(s) for s in doc["sources"]]
+
+
+def _absorb(base: Document, others: list[Document]) -> tuple[list[dict[str, Any]], list[Document]]:
+    """같은 대회의 다른 문서 출처를 base 로 모은다. 같은 사이트 출처가 겹치면 합치지 않는다."""
+    sources = list(base["sources"])
+    absorbed: list[Document] = []
+    for doc in others:
+        if {s["source"] for s in doc["sources"]} & {s["source"] for s in sources}:
+            continue
+        sources += doc["sources"]
+        absorbed.append(doc)
+    return sources, absorbed
+
+
+def _with_listing(
+    sources: list[dict[str, Any]], listing: Listing, now: datetime
+) -> list[dict[str, Any]]:
+    """출처 배열에 새로 수집한 값을 넣는다. 이미 있는 출처는 갈아 끼운다 (rules.refresh)."""
+    for i, s in enumerate(sources):
+        if s["source"] == listing.source and s["source_url"] == listing.source_url:
+            fresh = _source_doc(refresh(_to_listing(s), listing), now)
+            return [*sources[:i], fresh, *sources[i + 1 :]]
+    return [*sources, _source_doc(listing, now)]
+
+
+def _candidate_filter(listing: Listing) -> dict[str, Any]:
+    """같은 대회일 수 있는 문서: 같은 원문, 같은 참가 URL, 같은 마감일 (rules.same_contest)."""
+    same_listing = {"source": listing.source, "source_url": listing.source_url}
+    conditions: list[dict[str, Any]] = [
+        {"sources": {"$elemMatch": same_listing}},
+        {"sources.apply_end": _to_datetime(listing.apply_end)},
+    ]
+    key = url_key(listing.apply_url)
+    if key is not None:
+        conditions.append({"sources.url_key": key})
+    return {"$or": conditions}
+
+
+def _has_listing(doc: Document, listing: Listing) -> bool:
+    """문서에 이 사이트의 이 원문이 이미 있다."""
+    return any(
+        s["source"] == listing.source and s["source_url"] == listing.source_url
+        for s in doc["sources"]
+    )
+
+
 class ContestRepository:
     """MongoDB 대회 컬렉션 저장소."""
 
@@ -198,106 +298,173 @@ class ContestRepository:
         self._contests = db[COLLECTION]
 
     def ensure_indexes(self) -> None:
-        """병합 키 유일 인덱스와 조회용 인덱스를 만든다."""
-        self._contests.create_index([("merge_key", ASCENDING)], unique=True)
-        self._contests.create_index([("apply_end", ASCENDING)])
-        self._contests.create_index([("source", ASCENDING), ("source_url", ASCENDING)])
-
-    def save(
-        self, contest: RawContest, merge_key: str, now: datetime, *, tags: ContestTags
-    ) -> SaveOutcome:
-        """merge_key 기준 upsert. 같은 입력을 여러 번 저장해도 문서는 하나다 (F2-2 멱등).
-
-        분류 태그(F3-1)는 다른 필드와 함께 대표 소스의 값을 따른다. 참가 링크는 못 찾았으면
-        덮어쓰지 않고, 비어 있으면 어느 소스의 링크로든 채운다 (Q-29).
-        """
-        self._rekey(contest, merge_key)
-        fields = {**_fields(contest), "tags": _tags_doc(tags)}
-        origin = {"source": contest.source, "source_url": contest.source_url, "fetched_at": now}
-        if self._insert_if_absent(merge_key, fields, origin, now):
-            return SaveOutcome.INSERTED
-
-        if contest.apply_url is None:
-            del fields["apply_url"]
-        representative = self._contests.update_one(
-            {"merge_key": merge_key, "source": contest.source},
-            {"$set": {**fields, "updated_at": now}},
+        """이전 구조 문서를 옮기고, 출처 유일 인덱스와 조회·후보 검색용 인덱스를 만든다."""
+        existing = self._contests.index_information()
+        for name in LEGACY_INDEXES:
+            if name in existing:
+                self._contests.drop_index(name)
+        self._migrate_legacy()
+        self._drop_duplicate_listings()
+        self._contests.create_index(
+            [("sources.source", ASCENDING), ("sources.source_url", ASCENDING)], unique=True
         )
-        self._upsert_origin(merge_key, origin)
-        self._fill_apply_url(merge_key, contest.apply_url)
-        return SaveOutcome.UPDATED if representative.matched_count else SaveOutcome.MERGED
+        self._contests.create_index([("sources.url_key", ASCENDING)])
+        self._contests.create_index([("sources.apply_end", ASCENDING)])
+        self._contests.create_index([("apply_end", ASCENDING)])
 
-    def _rekey(self, contest: RawContest, merge_key: str) -> None:
-        """대표 소스가 마감일·제목을 바꿔 merge_key 가 달라지면 기존 문서의 키를 옮긴다.
+    def _migrate_legacy(self) -> None:
+        """출처에 원래 값이 없는 이전 문서는 최상위 값을 출처마다 채운다 (멱등).
 
-        같은 원문 URL(source + source_url)을 같은 대회로 본다. 새 키의 문서가 이미 있으면
-        (다른 소스와 병합됐거나 동시에 다른 작업이 만든 경우) UNIQUE 인덱스가 막으므로
-        옮기지 않는다. 미리 확인하지 않고 시도해서 확인과 갱신 사이의 경합을 없앤다.
+        이전에는 대표 소스의 값만 남겼다. 다른 출처는 같은 실행에서 다시 수집하면 제 값으로 바뀐다.
         """
-        with suppress(DuplicateKeyError):
+        for doc in self._contests.find({"sources.title": {"$exists": False}}):
+            shown = _to_listing(doc)
+            sources = [
+                _source_doc(
+                    replace(shown, source=s["source"], source_url=s["source_url"]),
+                    s["fetched_at"],
+                )
+                for s in doc.get("sources", [])
+            ]
             self._contests.update_one(
-                {
-                    "source": contest.source,
-                    "source_url": contest.source_url,
-                    "merge_key": {"$ne": merge_key},
-                },
-                {"$set": {"merge_key": merge_key}},
+                {"_id": doc["_id"]},
+                {"$set": {"sources": sources, "rev": 0}, "$unset": {"merge_key": ""}},
             )
 
-    def _insert_if_absent(
-        self, merge_key: str, fields: dict[str, Any], origin: dict[str, Any], now: datetime
-    ) -> bool:
-        """없으면 새 문서를 만들고 True. 이미 있거나 동시에 다른 작업이 먼저 만들었으면 False."""
-        try:
-            result = self._contests.update_one(
-                {"merge_key": merge_key},
+    def _drop_duplicate_listings(self) -> None:
+        """여러 문서에 들어 있는 같은 출처는 가장 오래된 문서에만 남긴다 (출처 UNIQUE 인덱스 전제).
+
+        이전 구조는 키를 옮기다 막히면 같은 출처를 다른 문서에 붙일 수 있었다. 출처가 모두 빠진
+        문서는 지우고, 나머지는 남은 출처로 값을 다시 고른다.
+        """
+        groups = self._contests.aggregate(
+            [
+                {"$unwind": "$sources"},
                 {
-                    "$setOnInsert": {
-                        **fields,
-                        "merge_key": merge_key,
-                        "source": origin["source"],
-                        "sources": [origin],
-                        "created_at": now,
-                        "updated_at": now,
+                    "$group": {
+                        "_id": {"source": "$sources.source", "source_url": "$sources.source_url"},
+                        "docs": {"$addToSet": "$_id"},
                     }
                 },
-                upsert=True,
-            )
-        except DuplicateKeyError:
-            # 같은 merge_key 를 동시에 upsert 하면 한쪽이 UNIQUE 인덱스에 걸린다.
-            # 먼저 만든 쪽을 따르고 이후 갱신·병합 단계로 넘어간다.
-            return False
-        return result.upserted_id is not None
-
-    def _fill_apply_url(self, merge_key: str, apply_url: str | None) -> None:
-        """참가 링크가 없는(None·필드 없음) 대회에만 링크를 채운다. 이미 있으면 그대로 둔다."""
-        if apply_url is None:
-            return
-        self._contests.update_one(
-            {"merge_key": merge_key, "apply_url": None}, {"$set": {"apply_url": apply_url}}
+                {"$match": {"docs.1": {"$exists": True}}},
+            ]
         )
+        now = datetime.now(KST)
+        for group in groups:
+            source, source_url = group["_id"]["source"], group["_id"]["source_url"]
+            for doc_id in sorted(group["docs"])[1:]:
+                doc = self._contests.find_one({"_id": doc_id})
+                if doc is None:
+                    continue
+                kept = [
+                    s
+                    for s in doc["sources"]
+                    if (s["source"], s["source_url"]) != (source, source_url)
+                ]
+                if kept:
+                    self._write(doc, kept, now, saved="")
+                else:
+                    self._contests.delete_one({"_id": doc_id})
 
-    def _upsert_origin(self, merge_key: str, origin: dict[str, Any]) -> None:
-        """출처를 추가하거나 갱신한다.
+    def save(self, listing: Listing, now: datetime) -> SaveOutcome:
+        """출처 하나를 같은 대회 문서에 넣는다. 여러 번 저장해도 결과가 같다 (F2-2 멱등).
 
-        '없으면 추가'를 `sources.source $ne` 조건을 건 단일 $push 로 해서, 동시에 불려도 같은
-        소스가 두 번 들어가지 않는다. 이미 있으면 그 항목만 갱신한다.
+        같은 대회 문서가 여럿이면(따로 저장돼 있던 중복) 하나로 합친다. 경합하면 다시 한다.
         """
-        pushed = self._contests.update_one(
-            {"merge_key": merge_key, "sources.source": {"$ne": origin["source"]}},
-            {"$push": {"sources": origin}},
+        for _ in range(SAVE_ATTEMPTS):
+            try:
+                return self._save_once(listing, now)
+            except _Conflict:
+                continue
+        raise RuntimeError(f"대회 저장 경합이 계속된다: {listing.source} {listing.source_url}")
+
+    def _save_once(self, listing: Listing, now: datetime) -> SaveOutcome:
+        """후보 문서를 읽고 출처를 붙여 한 번 저장한다. 그 사이 문서가 바뀌었으면 _Conflict."""
+        docs = list(self._contests.find(_candidate_filter(listing)).sort("_id", ASCENDING))
+        own = next((d for d in docs if _has_listing(d, listing)), None)
+        matches = [d for d in docs if d is not own and belongs_to(listing, _listings(d))]
+        if own is None and not matches:
+            self._insert(listing, now)
+            return SaveOutcome.INSERTED
+        base = own or matches[0]
+        sources, absorbed = _absorb(base, [d for d in matches if d is not base])
+        self._merge(base, absorbed, _with_listing(sources, listing, now), now, listing.source)
+        return SaveOutcome.UPDATED if own is not None else SaveOutcome.MERGED
+
+    def _merge(
+        self,
+        base: Document,
+        absorbed: list[Document],
+        sources: list[dict[str, Any]],
+        now: datetime,
+        saved: str,
+    ) -> None:
+        """중복 문서를 지우고 합친 출처를 base 에 쓴다. 중간에 경합하면 지운 문서를 되살린다.
+
+        출처 UNIQUE 인덱스 때문에 base 를 먼저 쓸 수 없다. CI·Atlas 무료 등급의 단일 노드에서도
+        돌도록 트랜잭션 대신 보상 처리로 원래 문서(같은 _id)를 복원한다.
+        """
+        deleted: list[Document] = []
+        try:
+            for doc in absorbed:
+                if not self._contests.delete_one(
+                    {"_id": doc["_id"], "rev": doc["rev"]}
+                ).deleted_count:
+                    raise _Conflict
+                deleted.append(doc)
+            self._write(base, sources, now, saved=saved)
+        except _Conflict:
+            for doc in deleted:
+                # 그 사이 같은 출처가 다른 문서에 들어갔으면 복원하지 않는다 (다음 수집이 채운다)
+                with suppress(DuplicateKeyError):
+                    self._contests.insert_one(doc)
+            raise
+
+    def _insert(self, listing: Listing, now: datetime) -> None:
+        """새 대회 문서를 만든다. 같은 원문을 동시에 넣으면 UNIQUE 인덱스에 걸려 다시 한다."""
+        sources = [_source_doc(listing, now)]
+        doc = {**_top_fields(sources), "sources": sources, "rev": 0}
+        try:
+            self._contests.insert_one({**doc, "created_at": now, "updated_at": now})
+        except DuplicateKeyError as exc:
+            raise _Conflict from exc
+
+    def _write(
+        self, base: Document, sources: list[dict[str, Any]], now: datetime, *, saved: str
+    ) -> None:
+        """출처 배열과 다시 고른 최상위 값을 쓴다.
+
+        보여 주는 값이 바뀌었거나 대표 출처(saved)를 다시 수집했으면 갱신 시각을 올린다 (Q-29).
+        """
+        top = _top_fields(sources)
+        fields: dict[str, Any] = {**top, "sources": sources}
+        if top["source"] == saved or any(base.get(k) != v for k, v in top.items()):
+            fields["updated_at"] = now
+        result = self._contests.update_one(
+            {"_id": base["_id"], "rev": base.get("rev", 0)},
+            {"$set": fields, "$inc": {"rev": 1}},
         )
-        if pushed.matched_count:
-            return
-        self._contests.update_one(
-            {"merge_key": merge_key, "sources.source": origin["source"]},
-            {
-                "$set": {
-                    "sources.$.source_url": origin["source_url"],
-                    "sources.$.fetched_at": origin["fetched_at"],
-                }
-            },
-        )
+        if not result.matched_count:
+            raise _Conflict
+
+    def prune_missing(self, source: str, seen_urls: set[str], now: datetime) -> int:
+        """성공한 수집에서 빠진 출처를 묶음에서 뺀다. 출처가 하나뿐이면 마감 삭제(Q-3)까지 둔다.
+
+        뺀 출처 수를 돌려준다. 그 사이 다른 저장이 문서를 바꿨으면 그 문서는 다음 수집으로 미룬다.
+        """
+        stale = {"source": source, "source_url": {"$nin": sorted(seen_urls)}}
+        removed = 0
+        query = {"sources": {"$elemMatch": stale}, "sources.1": {"$exists": True}}
+        for doc in self._contests.find(query):
+            kept = [
+                s for s in doc["sources"] if s["source"] != source or s["source_url"] in seen_urls
+            ]
+            try:
+                self._write(doc, kept, now, saved="")
+            except _Conflict:
+                continue
+            removed += len(doc["sources"]) - len(kept)
+        return removed
 
     def find(self, query: ContestQuery, today: date) -> tuple[list[ContestRecord], int]:
         """조건에 맞는 한 페이지와 전체 건수."""
@@ -377,6 +544,7 @@ class BookmarkRepository:
     def exists(self, user_id: int, contest_id: str) -> bool:
         """회원이 이 대회를 저장했는지 본다."""
         return self._session.get(Bookmark, (user_id, contest_id)) is not None
+
 
 class ClickRepository:
     """PostgreSQL 참가 바로가기 클릭 저장소 (F2-5). 클릭 수는 행을 세어 집계한다."""

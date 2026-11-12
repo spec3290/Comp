@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth.dependencies import get_optional_user_id
 from app.auth.models import User
 from app.contests.models import ContestClick
-from app.contests.repository import ClickRepository, ContestRecord
+from app.contests.repository import ClickRepository, ContestOrigin, ContestRecord
 from app.contests.router import today_kst
 from app.contests.service import (
     ApplyService,
@@ -44,7 +44,8 @@ def _record(contest_id: str, apply_end: date, apply_url: str | None = APPLY_URL)
         event_end=None,
         apply_url=apply_url,
         source_url="https://example.com",
-        sources=("dacon",),
+        sources=(ContestOrigin("dacon", "https://example.com", representative=True),),
+        updated_at=NOW,
     )
 
 
