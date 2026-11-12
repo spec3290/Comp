@@ -3,7 +3,7 @@
 
 수집: 소스마다 독립적으로 수집한다. 한 소스가 실패해도 기존 데이터는 그대로 두고 로그만
 남기며, 다른 소스는 계속 진행한다. 저장하기 전에 소스 태그·제목으로 분야·형식 태그를 붙인다.
-마감 3일이 지난 대회는 지운다 (Q-3).
+성공한 수집에서 빠진 출처는 묶음에서 뺀다(Q-2). 마감 3일이 지난 대회는 지운다 (Q-3).
 조회: 상태·D-day 는 저장하지 않고 요청 시점의 KST 날짜로 계산한다. 태그 필터에 미분류로
 걸린 대회는 '분류 확인 필요'로 표시한다.
 바로가기: 클릭을 기록하고 참가 링크를 돌려준다. 마감됐거나 링크가 없는 대회는 거절한다 (Q-29).
@@ -22,7 +22,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app.contests.crawlers.base import ContestSource
+from app.contests.crawlers.base import ContestSource, RawContest
 from app.contests.repository import (
     BookmarkRepository,
     ClickRepository,
@@ -37,8 +37,8 @@ from app.contests.rules import (
     ContestQuery,
     ContestStatus,
     ContestTags,
+    Listing,
     classify,
-    merge_key,
     needs_tag_check,
     purge_cutoff,
     split_source_tags,
@@ -58,6 +58,7 @@ class CollectResult:
     source: str
     fetched: int = 0
     skipped: int = 0  # 이미 삭제 기준을 넘긴 마감 대회 (Q-3)
+    pruned: int = 0  # 소스가 내려 묶음에서 뺀 출처 (Q-2)
     outcomes: Counter[SaveOutcome] = field(default_factory=Counter)
     error: str | None = None
 
@@ -85,22 +86,41 @@ def _collect_one(
             if contest.apply_end < cutoff:
                 result.skipped += 1
                 continue
-            key = merge_key(contest.title, contest.host, contest.apply_end)
-            tags = classify(contest.title, split_source_tags(contest.field), contest.source, rules)
-            result.outcomes[repo.save(contest, key, now_kst(), tags=tags)] += 1
+            result.outcomes[repo.save(to_listing(contest, rules), now_kst())] += 1
+        # 실패한 수집은 여기까지 오지 않으므로, 소스가 내린 대회만 출처에서 빠진다 (F2-1)
+        result.pruned = repo.prune_missing(source.name, {c.source_url for c in contests}, now_kst())
     except Exception as exc:
         logger.exception("수집 실패: %s", source.name)
         result.error = f"{type(exc).__name__}: {exc}"
         return result
     counts = {outcome.value: n for outcome, n in result.outcomes.items()}
     logger.info(
-        "수집 완료: %s fetched=%d skipped=%d %s",
+        "수집 완료: %s fetched=%d skipped=%d pruned=%d %s",
         source.name,
         result.fetched,
         result.skipped,
+        result.pruned,
         counts,
     )
     return result
+
+
+def to_listing(contest: RawContest, rules: ClassificationRules) -> Listing:
+    """수집한 대회에 분야·형식 태그를 붙여 출처 값으로 만든다 (F3-1)."""
+    tags = classify(contest.title, split_source_tags(contest.field), contest.source, rules)
+    return Listing(
+        source=contest.source,
+        source_url=contest.source_url,
+        title=contest.title,
+        host=contest.host,
+        field=contest.field,
+        apply_start=contest.apply_start,
+        apply_end=contest.apply_end,
+        event_start=contest.event_start,
+        event_end=contest.event_end,
+        apply_url=contest.apply_url,
+        tags=tags,
+    )
 
 
 def purge_closed(repo: ContestRepository, today: date) -> int:
