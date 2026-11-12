@@ -22,12 +22,13 @@
 - 없음. 다만 Mongo 통합 테스트 25건은 로컬에 `MONGODB_TEST_URI`가 없어 건너뛰었다. 저장 로직은 거의 다 Mongo 테스트로만 검증되므로 CI 결과를 보고 머지한다.
 
 ### 권장
-1. **동시성 보장 범위가 바뀌었다** — 이전 테스트는 a·b·c 세 소스가 같은 대회를 동시에 처음 저장해도 문서 하나라고 보장했다(merge_key UNIQUE). 지금 보장하는 것은 두 가지다. 같은 원문을 동시에 저장하면 문서 하나만 남고(출처 UNIQUE), 이미 있는 대회에 동시에 붙는 출처는 빠지거나 겹치지 않는다(`rev` 재시도). 다른 사이트가 같은 대회를 동시에 새로 만들면 문서가 둘 생길 수 있고, 다음 저장 때 합쳐진다. 수집은 `collect.yml` concurrency와 차례 실행으로 한 번에 하나만 돌아 실제로는 생기지 않는다. 그래서 테스트도 보장하는 범위로 바꿨다(`test_concurrent_saves_of_same_listing_keep_one_document`, `test_concurrent_merges_into_existing_contest_keep_every_source_once`). CI Mongo가 단일 노드라 트랜잭션은 쓰지 않았다. 문서를 합칠 때는 중복 문서를 먼저 지우고 합친 문서를 쓴다. 이 사이에 경합이 나면 지운 문서의 다른 출처가 다음 수집 전까지 빠질 수 있다.
+1. **동시성 보장 범위가 바뀌었다** — 이전 테스트는 a·b·c 세 소스가 같은 대회를 동시에 처음 저장해도 문서 하나라고 보장했다(merge_key UNIQUE). 지금 보장하는 것은 두 가지다. 같은 원문을 동시에 저장하면 문서 하나만 남고(출처 UNIQUE), 이미 있는 대회에 동시에 붙는 출처는 빠지거나 겹치지 않는다(`rev` 재시도). 다른 사이트가 같은 대회를 동시에 새로 만들면 문서가 둘 생길 수 있고, 다음 저장 때 합쳐진다. 수집은 `collect.yml` concurrency와 차례 실행으로 한 번에 하나만 돌아 실제로는 생기지 않는다. 그래서 테스트도 보장하는 범위로 바꿨다(`test_concurrent_saves_of_same_listing_keep_one_document`, `test_concurrent_merges_into_existing_contest_keep_every_source_once`). CI Mongo가 단일 노드라 트랜잭션은 쓰지 않았다. 문서를 합칠 때는 출처 UNIQUE 인덱스 때문에 중복 문서를 먼저 지우고 합친 문서를 쓴다. 쓰기가 경합으로 실패하면 지운 문서를 같은 `_id`로 되살린다(CodeRabbit 지적 반영). 네트워크 오류처럼 경합이 아닌 실패는 되살리지 못해, 그 문서의 출처는 다음 수집 때 다시 붙는다.
 2. **합쳐진 문서를 가리키던 북마크·클릭** — 합칠 때는 다시 수집한 출처의 문서 id를 남기고 다른 문서는 지운다. 지운 문서를 저장한 회원에게는 그 대회가 삭제된 대회처럼 목록에서 빠진다(ADR-0005 전제). 실데이터 기준으로 다음 수집 때 4건이 합쳐진다. 북마크를 남은 id로 옮기려면 PostgreSQL까지 고쳐야 하는데, 수집 작업에는 PostgreSQL 접속이 없어서 이번에는 하지 않았다.
 3. **포함 관계 판정의 위험** — '2026 AI 해커톤'과 '2026 AI 해커톤 본선 안내'처럼 한쪽이 다른 쪽을 포함하고 마감일이 같으면 다른 사이트끼리 합쳐진다. 같은 사이트 안에서는 원문이 달라 합쳐지지 않는다. 실데이터에서는 이런 오병합이 없었다.
 4. **우선 소스가 대회를 내린 뒤** — Devpost처럼 열린 대회만 싣는 소스가 마감 후 대회를 내리면 그 출처가 빠지고, 다음 순위 출처의 값(다른 마감일일 수 있음)으로 바뀐다. 남은 출처의 마감일이 더 늦으면 '접수 중'으로 다시 보일 수 있다.
 5. **이벤터스 주최 값** — 이벤터스 크롤러는 주최에 채널 이름(`app_title`)을 넣는다. 채널 이름이 행사 이름과 같은 경우가 있어(성평등 챌린지), 이벤터스가 대표인 묶음에서는 주최가 제목처럼 보인다. 크롤러 쪽 문제라 이번 범위에서 고치지 않았다.
-6. **develop CI 복구** — #47 머지 뒤 develop의 `mypy`가 `tests/unit/test_apply_link.py`의 `ContestRecord` 인자(`updated_at`, `sources` 타입) 때문에 실패하고 있었다. 이 PR이 통과하려면 필요해서 픽스처 두 줄을 같이 고쳤다.
+6. **CodeRabbit 지적 반영 (PR #49)** — (1) 이전 구조에서는 같은 출처가 두 문서에 들어갈 수 있었다. 그러면 출처 UNIQUE 인덱스를 만들지 못해 수집이 시작되지 않는다. 그래서 `ensure_indexes`가 인덱스를 만들기 전에 그 출처를 가장 오래된 문서에만 남긴다(`_drop_duplicate_listings`). 2026-11-12 실데이터에는 이런 출처가 0건이다. (2) 합치기 실패 시 보상 처리를 위 1번처럼 넣었다. (3) features.md 판정 기준에 8자 조건을 적었다.
+7. **develop CI 복구** — #47 머지 뒤 develop의 `mypy`가 `tests/unit/test_apply_link.py`의 `ContestRecord` 인자(`updated_at`, `sources` 타입) 때문에 실패하고 있었다. 이 PR이 통과하려면 필요해서 픽스처 두 줄을 같이 고쳤다.
 
 ### 확인한 것
 - 명세: F2-2 수용 기준을 새 판정 규칙으로 고치고 상태를 `done`으로 바꿨다(사용자 승인). 멱등(재수집 시 모두 UPDATED), 소스 간 병합, 순서와 무관한 값, 빠진 출처 정리를 테스트로 확인한다.
@@ -35,7 +36,7 @@
 - 아키텍처: 판정·값 선택은 `rules.py`의 순수 함수(`same_contest`, `belongs_to`, `resolve`, `refresh`, `url_key`)다. 저장소는 후보 조회·쓰기만 하고, 서비스는 `RawContest`를 `Listing`으로 바꿔 저장한 뒤 빠진 출처를 정리한다. AC-1~3 유지, 새 `noqa` 없음. 테스트에 `# type: ignore[arg-type]` 하나(`replace(**changes)` 헬퍼).
 - 정확성: 날짜는 KST 자정 tz-aware로 저장·비교한다. 실패한 수집은 `prune_missing`까지 가지 않아 기존 출처를 유지한다(F2-1). 다시 수집할 때 링크를 못 찾으면 전에 찾은 링크를 남긴다(Q-30). 상세 API 응답 형태는 바뀌지 않았다.
 - 주석: 새로 쓰거나 고친 모듈·클래스·함수 모두 한 줄 docstring.
-- 테스트: `tests/unit/test_dedup_rules.py` 13건(실데이터 사례 판정, 예선·본선, 짧은 제목, 같은 사이트, URL 정규화, 값 선택, 태그 합집합, 순서 무관, 링크 유지), `tests/unit/test_collect.py` 갱신(빈 주최 병합, 실패 소스는 정리 안 함, 정리에 넘기는 원문 목록), Mongo 통합 `test_contest_repository.py`(이전 문서 이전, 중복 문서 합치기, 출처 UNIQUE, 빠진 출처 정리, 동시성 2건, 태그 합집합)와 `test_contest_dedup.py`(우선순위 대표, 재수집 멱등, 순서 무관, 다른 대회 분리, 내린 출처 제거). 네트워크 호출 없음.
+- 테스트: `tests/unit/test_dedup_rules.py` 13건(실데이터 사례 판정, 예선·본선, 짧은 제목, 같은 사이트, URL 정규화, 값 선택, 태그 합집합, 순서 무관, 링크 유지), `tests/unit/test_collect.py` 갱신(빈 주최 병합, 실패 소스는 정리 안 함, 정리에 넘기는 원문 목록), Mongo 통합 `test_contest_repository.py`(이전 문서 이전, 이전 문서 간 중복 출처 정리, 합치기 실패 시 복원, 중복 문서 합치기, 출처 UNIQUE, 빠진 출처 정리, 동시성 2건, 태그 합집합)와 `test_contest_dedup.py`(우선순위 대표, 재수집 멱등, 순서 무관, 다른 대회 분리, 내린 출처 제거). 네트워크 호출 없음.
 - Git 규약: 이슈 #48, `feature/48_dedup-sources`, 커밋 `⚡`/`📝`.
 
 ### 실행한 검사
@@ -45,4 +46,4 @@
 | `uv run ruff check .` | 통과 |
 | `uv run mypy` | 통과 (65 source files) |
 | `uv run lint-imports` | 통과 (3 kept, 0 broken) |
-| `uv run pytest -q` | 303 passed, 26 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI에서 실행) |
+| `uv run pytest -q` | 303 passed, 28 skipped (`MONGODB_TEST_URI` 미설정으로 Mongo 통합 테스트 건너뜀, CI에서 실행) |

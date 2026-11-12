@@ -3,12 +3,19 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
+from typing import Any
 
 import pytest
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError
 
-from app.contests.repository import COLLECTION, ContestOrigin, ContestRepository, SaveOutcome
+from app.contests.repository import (
+    COLLECTION,
+    ContestOrigin,
+    ContestRepository,
+    SaveOutcome,
+    _Conflict,
+)
 from app.contests.rules import (
     NO_TAGS,
     ContestQuery,
@@ -446,3 +453,46 @@ def test_prune_missing_drops_source_and_recomputes_values(mongo_db: Database[Doc
     assert [s["source"] for s in merged["sources"]] == ["dev_event"]
     assert (merged["source"], merged["title"]) == ("dev_event", "2026 AI 해커톤 대회")
     assert mongo_db[COLLECTION].count_documents({"title": "혼자 남은 대회"}) == 1
+
+
+@pytest.mark.feature("F2-2")
+def test_ensure_indexes_keeps_listing_shared_by_legacy_documents_in_oldest(
+    mongo_db: Database[Document],
+) -> None:
+    """이전 구조에서 두 문서에 같이 들어간 출처는 오래된 문서에만 남기고 인덱스를 만든다."""
+    mongo_db[COLLECTION].insert_many([_legacy_doc("a", ["b"]), _legacy_doc("c", ["b"])])
+
+    ContestRepository(mongo_db).ensure_indexes()
+
+    docs = list(mongo_db[COLLECTION].find().sort("_id", 1))
+    assert [[s["source"] for s in d["sources"]] for d in docs] == [["a", "b"], ["c"]]
+    assert docs[1]["source"] == "c"  # 남은 출처로 값을 다시 골랐다
+
+
+class _FlakyRepository(ContestRepository):
+    """처음 한 번은 합친 문서 쓰기가 경합으로 실패하는 저장소."""
+
+    failed = False
+
+    def _write(
+        self, base: Document, sources: list[dict[str, Any]], now: datetime, *, saved: str
+    ) -> None:
+        """첫 호출만 _Conflict 를 던진다."""
+        if not self.failed:
+            self.failed = True
+            raise _Conflict
+        super()._write(base, sources, now, saved=saved)
+
+
+@pytest.mark.feature("F2-2")
+def test_failed_merge_restores_absorbed_document(mongo_db: Database[Document]) -> None:
+    """합친 문서를 쓰다 경합하면 지운 중복 문서를 되살려, 다시 할 때 출처를 잃지 않는다."""
+    mongo_db[COLLECTION].insert_many([_legacy_doc("dev_event", []), _legacy_doc("code4korea", [])])
+    repo = _FlakyRepository(mongo_db)
+    repo.ensure_indexes()
+
+    assert _save(repo, _contest("dev_event")) is SaveOutcome.UPDATED
+
+    docs = list(mongo_db[COLLECTION].find())
+    assert len(docs) == 1
+    assert sorted(s["source"] for s in docs[0]["sources"]) == ["code4korea", "dev_event"]

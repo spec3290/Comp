@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from enum import StrEnum
@@ -303,6 +304,7 @@ class ContestRepository:
             if name in existing:
                 self._contests.drop_index(name)
         self._migrate_legacy()
+        self._drop_duplicate_listings()
         self._contests.create_index(
             [("sources.source", ASCENDING), ("sources.source_url", ASCENDING)], unique=True
         )
@@ -329,6 +331,41 @@ class ContestRepository:
                 {"$set": {"sources": sources, "rev": 0}, "$unset": {"merge_key": ""}},
             )
 
+    def _drop_duplicate_listings(self) -> None:
+        """여러 문서에 들어 있는 같은 출처는 가장 오래된 문서에만 남긴다 (출처 UNIQUE 인덱스 전제).
+
+        이전 구조는 키를 옮기다 막히면 같은 출처를 다른 문서에 붙일 수 있었다. 출처가 모두 빠진
+        문서는 지우고, 나머지는 남은 출처로 값을 다시 고른다.
+        """
+        groups = self._contests.aggregate(
+            [
+                {"$unwind": "$sources"},
+                {
+                    "$group": {
+                        "_id": {"source": "$sources.source", "source_url": "$sources.source_url"},
+                        "docs": {"$addToSet": "$_id"},
+                    }
+                },
+                {"$match": {"docs.1": {"$exists": True}}},
+            ]
+        )
+        now = datetime.now(KST)
+        for group in groups:
+            source, source_url = group["_id"]["source"], group["_id"]["source_url"]
+            for doc_id in sorted(group["docs"])[1:]:
+                doc = self._contests.find_one({"_id": doc_id})
+                if doc is None:
+                    continue
+                kept = [
+                    s
+                    for s in doc["sources"]
+                    if (s["source"], s["source_url"]) != (source, source_url)
+                ]
+                if kept:
+                    self._write(doc, kept, now, saved="")
+                else:
+                    self._contests.delete_one({"_id": doc_id})
+
     def save(self, listing: Listing, now: datetime) -> SaveOutcome:
         """출처 하나를 같은 대회 문서에 넣는다. 여러 번 저장해도 결과가 같다 (F2-2 멱등).
 
@@ -351,9 +388,37 @@ class ContestRepository:
             return SaveOutcome.INSERTED
         base = own or matches[0]
         sources, absorbed = _absorb(base, [d for d in matches if d is not base])
-        self._delete_absorbed(absorbed)
-        self._write(base, _with_listing(sources, listing, now), now, saved=listing.source)
+        self._merge(base, absorbed, _with_listing(sources, listing, now), now, listing.source)
         return SaveOutcome.UPDATED if own is not None else SaveOutcome.MERGED
+
+    def _merge(
+        self,
+        base: Document,
+        absorbed: list[Document],
+        sources: list[dict[str, Any]],
+        now: datetime,
+        saved: str,
+    ) -> None:
+        """중복 문서를 지우고 합친 출처를 base 에 쓴다. 중간에 경합하면 지운 문서를 되살린다.
+
+        출처 UNIQUE 인덱스 때문에 base 를 먼저 쓸 수 없다. CI·Atlas 무료 등급의 단일 노드에서도
+        돌도록 트랜잭션 대신 보상 처리로 원래 문서(같은 _id)를 복원한다.
+        """
+        deleted: list[Document] = []
+        try:
+            for doc in absorbed:
+                if not self._contests.delete_one(
+                    {"_id": doc["_id"], "rev": doc["rev"]}
+                ).deleted_count:
+                    raise _Conflict
+                deleted.append(doc)
+            self._write(base, sources, now, saved=saved)
+        except _Conflict:
+            for doc in deleted:
+                # 그 사이 같은 출처가 다른 문서에 들어갔으면 복원하지 않는다 (다음 수집이 채운다)
+                with suppress(DuplicateKeyError):
+                    self._contests.insert_one(doc)
+            raise
 
     def _insert(self, listing: Listing, now: datetime) -> None:
         """새 대회 문서를 만든다. 같은 원문을 동시에 넣으면 UNIQUE 인덱스에 걸려 다시 한다."""
@@ -363,13 +428,6 @@ class ContestRepository:
             self._contests.insert_one({**doc, "created_at": now, "updated_at": now})
         except DuplicateKeyError as exc:
             raise _Conflict from exc
-
-    def _delete_absorbed(self, absorbed: list[Document]) -> None:
-        """합친 중복 문서를 지운다. 출처 UNIQUE 인덱스 때문에 합친 문서를 쓰기 전에 지운다."""
-        for doc in absorbed:
-            result = self._contests.delete_one({"_id": doc["_id"], "rev": doc.get("rev", 0)})
-            if not result.deleted_count:
-                raise _Conflict
 
     def _write(
         self, base: Document, sources: list[dict[str, Any]], now: datetime, *, saved: str
