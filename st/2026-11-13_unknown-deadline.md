@@ -60,5 +60,5 @@
 | `uv run ruff format --check .` / `uv run ruff check .` | 통과 |
 | `uv run mypy` | 통과 (65 files) |
 | `uv run lint-imports` | 3 kept, 0 broken |
-| `uv run pytest` | 315 passed, 28 skipped (Mongo 통합, 로컬 URI 없음) |
+| `uv run pytest` | 315 passed, 32 skipped (Mongo 통합, 로컬 URI 없음) |
 | comp-fe `npm run lint` / `npm run build` | 통과 |
