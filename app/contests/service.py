@@ -39,6 +39,7 @@ from app.contests.rules import (
     ContestTags,
     Listing,
     classify,
+    fill_competition_deadline,
     needs_tag_check,
     purge_cutoff,
     split_source_tags,
@@ -57,7 +58,7 @@ class CollectResult:
 
     source: str
     fetched: int = 0
-    skipped: int = 0  # 이미 삭제 기준을 넘긴 마감 대회 (Q-3)
+    skipped: int = 0  # 이미 삭제 기준을 넘긴 마감 대회 (Q-3, Q-35)
     pruned: int = 0  # 소스가 내려 묶음에서 뺀 출처 (Q-2)
     outcomes: Counter[SaveOutcome] = field(default_factory=Counter)
     error: str | None = None
@@ -83,10 +84,11 @@ def _collect_one(
         contests = source.fetch()
         result.fetched = len(contests)
         for contest in contests:
-            if contest.apply_end < cutoff:
+            listing = to_listing(contest, rules)
+            if listing.period().closes_on < cutoff:
                 result.skipped += 1
                 continue
-            result.outcomes[repo.save(to_listing(contest, rules), now_kst())] += 1
+            result.outcomes[repo.save(listing, now_kst())] += 1
         # 실패한 수집은 여기까지 오지 않으므로, 소스가 내린 대회만 출처에서 빠진다 (F2-1)
         result.pruned = repo.prune_missing(source.name, {c.source_url for c in contests}, now_kst())
     except Exception as exc:
@@ -106,9 +108,12 @@ def _collect_one(
 
 
 def to_listing(contest: RawContest, rules: ClassificationRules) -> Listing:
-    """수집한 대회에 분야·형식 태그를 붙여 출처 값으로 만든다 (F3-1)."""
+    """수집한 대회에 분야·형식 태그를 붙여 출처 값으로 만든다 (F3-1).
+
+    마감일을 못 찾은 경진대회는 형식을 알아야 대회 마감일로 채울 수 있어 분류 뒤에 채운다 (Q-35).
+    """
     tags = classify(contest.title, split_source_tags(contest.field), contest.source, rules)
-    return Listing(
+    listing = Listing(
         source=contest.source,
         source_url=contest.source_url,
         title=contest.title,
@@ -121,6 +126,7 @@ def to_listing(contest: RawContest, rules: ClassificationRules) -> Listing:
         apply_url=contest.apply_url,
         tags=tags,
     )
+    return fill_competition_deadline(listing)
 
 
 def purge_closed(repo: ContestRepository, today: date) -> int:
@@ -136,7 +142,7 @@ class ContestView:
 
     record: ContestRecord
     status: ContestStatus
-    d_day: int
+    d_day: int | None  # 마감일을 모르면 None (Q-35)
     tag_check_needed: bool
 
 
@@ -152,7 +158,7 @@ class ContestPage:
 
 def _view(record: ContestRecord, today: date, requested: ContestTags = NO_TAGS) -> ContestView:
     """대회에 상태·D-day·분류 확인 필요 여부를 계산해 붙인다."""
-    period = ApplyPeriod(start=record.apply_start, end=record.apply_end)
+    period = ApplyPeriod(record.apply_start, record.apply_end, record.event_start, record.event_end)
     return ContestView(
         record=record,
         status=period.status(today),

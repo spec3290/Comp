@@ -59,8 +59,8 @@ def test_dev_event_keeps_only_contests_and_maps_recruit_period() -> None:
     assert recruit.field == "AI"
     assert (recruit.apply_start, recruit.apply_end) == (date(2026, 10, 1), date(2026, 10, 20))
     assert recruit.event_start is None
-    assert one_day.apply_start is None
-    assert one_day.apply_end == date(2026, 11, 1)
+    # 행사 일정(DATE)만 있으면 접수 마감일은 모른다. 행사 시작일로 채우지 않는다 (Q-35)
+    assert (one_day.apply_start, one_day.apply_end) == (None, None)
     assert one_day.event_start == date(2026, 11, 1)
 
 
