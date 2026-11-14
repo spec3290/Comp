@@ -103,3 +103,6 @@ addopts = "-ra --strict-markers"
 markers = [
     "feature(id): 이 테스트가 검증하는 기능 ID (예: F2-2). docs/features.md 참고",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]  # app 폴더만 패키지로 포함하겠다는 뜻입니다.

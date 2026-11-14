@@ -3,6 +3,8 @@
 문서 하나가 병합된 대회 하나다. 날짜는 KST 자정 tz-aware datetime 으로 저장한다
 (BSON 에 날짜 전용 타입이 없다). 사이트별로 수집한 원래 값은 `sources` 배열에 출처마다 두고,
 최상위 값은 저장할 때마다 `rules.resolve` 로 다시 고른다 (Q-2).
+접수 마감일을 모르는 대회가 있어(Q-35) 상태 필터·마감 임박순·삭제는 최상위의 참가 마지막 날
+(`closes_on`, `rules.ApplyPeriod.closes_on`)로 한다. 상태가 아니라 날짜라 저장한다 (ADR-0005).
 같은 대회 판정은 `rules.same_contest` 다.
 
 한 사이트의 원문(source + source_url)은 문서 하나에만 들어가도록 UNIQUE 인덱스가 막는다.
@@ -31,6 +33,7 @@ from sqlalchemy.orm import Session
 from app.contests.models import Bookmark, ContestClick
 from app.contests.rules import (
     NO_TAGS,
+    ApplyPeriod,
     ContestQuery,
     ContestStatus,
     ContestTags,
@@ -46,8 +49,8 @@ from app.core.db import Document
 from app.core.time import KST
 
 COLLECTION = "contests"
-# 이전 구조(merge_key·대표 소스 고정)의 인덱스. 새 구조로 옮길 때 지운다.
-LEGACY_INDEXES = ("merge_key_1", "source_1_source_url_1")
+# 이전 구조(merge_key·대표 소스 고정, 마감일 기준 조회)의 인덱스. 새 구조로 옮길 때 지운다.
+LEGACY_INDEXES = ("merge_key_1", "source_1_source_url_1", "apply_end_1")
 # 경합하면 매번 한 저장은 성공하므로, 같은 문서를 동시에 고치는 저장 수보다 넉넉하면 된다
 SAVE_ATTEMPTS = 50
 
@@ -78,7 +81,7 @@ class ContestRecord:
     host: str
     field: str
     apply_start: date | None
-    apply_end: date
+    apply_end: date | None  # 못 찾은 대회는 None (Q-35)
     event_start: date | None
     event_end: date | None
     apply_url: str | None  # 못 가져온 대회는 None (Q-29)
@@ -89,7 +92,7 @@ class ContestRecord:
 
 
 _SORT_KEYS: dict[SortOrder, list[tuple[str, int]]] = {
-    SortOrder.DEADLINE: [("apply_end", ASCENDING), ("_id", ASCENDING)],
+    SortOrder.DEADLINE: [("closes_on", ASCENDING), ("_id", ASCENDING)],
     SortOrder.LATEST: [("created_at", DESCENDING), ("_id", DESCENDING)],
 }
 
@@ -114,9 +117,9 @@ def _status_filter(status: ContestStatus, today: datetime) -> dict[str, Any]:
     if status is ContestStatus.UPCOMING:
         return {"apply_start": {"$gt": today}}
     if status is ContestStatus.CLOSED:
-        return {"apply_end": {"$lt": today}}
+        return {"closes_on": {"$lt": today}}
     started = {"$or": [{"apply_start": None}, {"apply_start": {"$lte": today}}]}
-    return {"$and": [started, {"apply_end": {"$gte": today}}]}
+    return {"$and": [started, {"closes_on": {"$gte": today}}]}
 
 
 def _tag_filter(dimension: Dimension, requested: frozenset[str]) -> dict[str, Any]:
@@ -188,16 +191,13 @@ def _to_tags(doc: dict[str, list[str]]) -> ContestTags:
 
 def _to_record(doc: Document) -> ContestRecord:
     """MongoDB 문서를 ContestRecord 로 바꾼다."""
-    apply_end = _to_date(doc["apply_end"])
-    if apply_end is None:
-        raise ValueError(f"apply_end 가 없는 대회 문서: {doc['_id']}")
     return ContestRecord(
         id=str(doc["_id"]),
         title=doc["title"],
         host=doc["host"],
         field=doc["field"],
         apply_start=_to_date(doc.get("apply_start")),
-        apply_end=apply_end,
+        apply_end=_to_date(doc.get("apply_end")),
         event_start=_to_date(doc.get("event_start")),
         event_end=_to_date(doc.get("event_end")),
         apply_url=doc.get("apply_url"),
@@ -217,9 +217,6 @@ def _to_record(doc: Document) -> ContestRecord:
 
 def _to_listing(doc: Document) -> Listing:
     """`sources` 항목(또는 같은 모양의 문서)을 Listing 으로 바꾼다."""
-    apply_end = _to_date(doc["apply_end"])
-    if apply_end is None:
-        raise ValueError(f"apply_end 가 없는 출처: {doc.get('source')} {doc.get('source_url')}")
     return Listing(
         source=doc["source"],
         source_url=doc["source_url"],
@@ -227,7 +224,7 @@ def _to_listing(doc: Document) -> Listing:
         host=doc["host"],
         field=doc["field"],
         apply_start=_to_date(doc.get("apply_start")),
-        apply_end=apply_end,
+        apply_end=_to_date(doc.get("apply_end")),
         event_start=_to_date(doc.get("event_start")),
         event_end=_to_date(doc.get("event_end")),
         apply_url=doc.get("apply_url"),
@@ -238,7 +235,12 @@ def _to_listing(doc: Document) -> Listing:
 def _top_fields(sources: list[dict[str, Any]]) -> dict[str, Any]:
     """출처들에서 고른 최상위 값 (목록·상세·필터가 읽는 값)."""
     shown = resolve([_to_listing(s) for s in sources])
-    return {**_listing_fields(shown), "source": shown.source, "tags": _tags_doc(shown.tags)}
+    return {
+        **_listing_fields(shown),
+        "closes_on": _to_datetime(shown.period().closes_on),
+        "source": shown.source,
+        "tags": _tags_doc(shown.tags),
+    }
 
 
 def _listings(doc: Document) -> list[Listing]:
@@ -270,12 +272,14 @@ def _with_listing(
 
 
 def _candidate_filter(listing: Listing) -> dict[str, Any]:
-    """같은 대회일 수 있는 문서: 같은 원문, 같은 참가 URL, 같은 마감일 (rules.same_contest)."""
+    """같은 대회일 수 있는 문서: 같은 원문, 같은 참가 URL, 같은 마감일 (rules.same_contest).
+
+    마감일을 모르면 마감일로는 찾지 않는다. null 끼리 맞추면 미확인 문서를 전부 읽는다 (Q-35).
+    """
     same_listing = {"source": listing.source, "source_url": listing.source_url}
-    conditions: list[dict[str, Any]] = [
-        {"sources": {"$elemMatch": same_listing}},
-        {"sources.apply_end": _to_datetime(listing.apply_end)},
-    ]
+    conditions: list[dict[str, Any]] = [{"sources": {"$elemMatch": same_listing}}]
+    if listing.apply_end is not None:
+        conditions.append({"sources.apply_end": _to_datetime(listing.apply_end)})
     key = url_key(listing.apply_url)
     if key is not None:
         conditions.append({"sources.url_key": key})
@@ -305,12 +309,13 @@ class ContestRepository:
                 self._contests.drop_index(name)
         self._migrate_legacy()
         self._drop_duplicate_listings()
+        self._backfill_closes_on()
         self._contests.create_index(
             [("sources.source", ASCENDING), ("sources.source_url", ASCENDING)], unique=True
         )
         self._contests.create_index([("sources.url_key", ASCENDING)])
         self._contests.create_index([("sources.apply_end", ASCENDING)])
-        self._contests.create_index([("apply_end", ASCENDING)])
+        self._contests.create_index([("closes_on", ASCENDING)])
 
     def _migrate_legacy(self) -> None:
         """출처에 원래 값이 없는 이전 문서는 최상위 값을 출처마다 채운다 (멱등).
@@ -329,6 +334,19 @@ class ContestRepository:
             self._contests.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {"sources": sources, "rev": 0}, "$unset": {"merge_key": ""}},
+            )
+
+    def _backfill_closes_on(self) -> None:
+        """참가 마지막 날이 없는 이전 문서에 최상위 날짜로 채운다 (멱등, Q-35)."""
+        for doc in self._contests.find({"closes_on": {"$exists": False}}):
+            period = ApplyPeriod(
+                _to_date(doc.get("apply_start")),
+                _to_date(doc.get("apply_end")),
+                _to_date(doc.get("event_start")),
+                _to_date(doc.get("event_end")),
+            )
+            self._contests.update_one(
+                {"_id": doc["_id"]}, {"$set": {"closes_on": _to_datetime(period.closes_on)}}
             )
 
     def _drop_duplicate_listings(self) -> None:
@@ -494,8 +512,8 @@ class ContestRepository:
         return {record.id: record for record in records}
 
     def delete_closed_before(self, cutoff: date) -> int:
-        """접수 마감일이 cutoff 보다 이른 대회를 지운다 (Q-3). 지운 건수를 돌려준다."""
-        result = self._contests.delete_many({"apply_end": {"$lt": _to_datetime(cutoff)}})
+        """참가 마지막 날이 cutoff 보다 이른 대회를 지운다 (Q-3, Q-35). 지운 건수를 돌려준다."""
+        result = self._contests.delete_many({"closes_on": {"$lt": _to_datetime(cutoff)}})
         return result.deleted_count
 
 
