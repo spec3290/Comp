@@ -463,3 +463,38 @@ def test_dispatch_cli_resolves_user_foreign_key_without_app() -> None:
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
 
     assert result.returncode == 0, result.stderr
+
+
+class _BookmarksWithWithdrawnUser(NotificationRepository):
+    """북마크를 읽은 뒤 탈퇴한 회원(없는 id)이 대상에 남은 상황을 만든다."""
+
+    def bookmarks(self) -> list[tuple[int, str]]:
+        """실제 북마크 앞에 이미 지워진 회원의 북마크를 끼운다."""
+        return [(999, CONTEST_ID), *super().bookmarks()]
+
+
+@pytest.mark.feature("F4-1")
+def test_add_skips_duplicate_in_same_transaction_without_error(session: Session) -> None:
+    """같은 알림을 커밋 전에 두 번 넣어도 오류 없이 한 건만 남는다 (동시 발급 대비)."""
+    repo = NotificationRepository(session)
+    args = (USER, CONTEST_ID, NotificationKind.DEADLINE_D7, "대회", _days(7), NOW)
+
+    first, second = repo.add(*args), repo.add(*args)
+    repo.commit()
+
+    assert (first, second) == (True, False)
+    assert len(_sent(session)) == 1
+
+
+@pytest.mark.feature("F4-1")
+def test_withdrawn_user_does_not_cancel_others_notifications(
+    session: Session, contests: FakeContests
+) -> None:
+    """발급 중 탈퇴한 회원은 건너뛰고 다른 회원의 알림은 저장한다."""
+    _bookmark(session, USER, CONTEST_ID)
+    dispatcher = NotificationDispatcher(_BookmarksWithWithdrawnUser(session), contests)
+
+    created = dispatcher.dispatch(TODAY, NOW)
+
+    assert created == 1
+    assert _sent(session) == [(USER, CONTEST_ID, "deadline_d7")]

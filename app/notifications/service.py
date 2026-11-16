@@ -35,7 +35,10 @@ class NotificationDispatcher:
         self._contests = contests
 
     def dispatch(self, today: date, now: datetime) -> int:
-        """오늘 보낼 알림을 만들고 새로 만든 건수를 돌려준다. 다시 실행해도 중복되지 않는다."""
+        """오늘 보낼 알림을 만들고 새로 만든 건수를 돌려준다.
+
+        다시 실행하거나 동시에 실행해도 중복되지 않는다. 그 사이 탈퇴한 회원은 건너뛴다.
+        """
         bookmarks = self._notifications.bookmarks()
         records = self._contests.get_many(sorted({contest_id for _, contest_id in bookmarks}))
         opt_outs = self._notifications.all_opt_outs()
@@ -47,12 +50,9 @@ class NotificationDispatcher:
             enabled = ALL_KINDS - opt_outs.get(user_id, frozenset())
             dates = ContestDates(apply_end=record.apply_end, event_start=record.event_start)
             for due in due_notifications(dates, today, enabled):
-                if self._notifications.sent(user_id, contest_id, due.kind):
-                    continue
-                self._notifications.add(
+                created += self._notifications.add(
                     user_id, contest_id, due.kind, record.title, due.target_date, now
                 )
-                created += 1
         self._notifications.commit()
         logger.info("알림 발급: %d건 (저장 %d건, 기준일 %s)", created, len(bookmarks), today)
         return created

@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Date, delete, exists, func, literal, select, update
+from sqlalchemy.dialects.postgresql import Insert as PostgresInsert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import Insert as SqliteInsert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from app.auth.models import User
 from app.contests.models import Bookmark
+from app.core.sql import AwareDateTime
 from app.notifications.models import Notification, NotificationOptOut
 from app.notifications.rules import NotificationKind
+
+OnConflictInsert = PostgresInsert | SqliteInsert
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,11 @@ class NotificationSlice:
     items: list[NotificationRecord]
     total: int
     unread: int
+
+
+def _insert_for(session: Session) -> Callable[[type[Notification]], OnConflictInsert]:
+    """충돌 무시 INSERT 를 방언에 맞게 고른다 (운영 PostgreSQL, 테스트 SQLite)."""
+    return sqlite_insert if session.get_bind().dialect.name == "sqlite" else postgresql_insert
 
 
 def _to_record(row: Notification) -> NotificationRecord:
@@ -67,17 +81,6 @@ class NotificationRepository:
             kinds.setdefault(row.user_id, set()).add(NotificationKind(row.kind))
         return {user_id: frozenset(values) for user_id, values in kinds.items()}
 
-    def sent(self, user_id: int, contest_id: str, kind: NotificationKind) -> bool:
-        """같은 회원·대회·종류의 알림을 이미 보냈는지 본다."""
-        found = self._session.scalar(
-            select(Notification.id).where(
-                Notification.user_id == user_id,
-                Notification.contest_id == contest_id,
-                Notification.kind == kind.value,
-            )
-        )
-        return found is not None
-
     def add(
         self,
         user_id: int,
@@ -86,18 +89,29 @@ class NotificationRepository:
         title: str,
         target_date: date,
         now: datetime,
-    ) -> None:
-        """알림 한 건을 세션에 더한다. 저장은 `commit` 때 한다."""
-        self._session.add(
-            Notification(
-                user_id=user_id,
-                contest_id=contest_id,
-                kind=kind.value,
-                title=title,
-                target_date=target_date,
-                created_at=now,
-            )
+    ) -> bool:
+        """알림 한 건을 넣고 실제로 넣었으면 True. 저장 확정은 `commit` 때 한다.
+
+        이미 보낸 알림(동시 실행 포함)이나 그 사이 탈퇴한 회원의 알림은 오류 없이 건너뛴다.
+        충돌·외래 키 오류로 같은 실행의 다른 알림까지 롤백되지 않도록 DB 가 한 문장으로 판단한다.
+        """
+        values = select(
+            literal(user_id),
+            literal(contest_id),
+            literal(kind.value),
+            literal(title),
+            literal(target_date, Date()),
+            literal(now, AwareDateTime()),
+        ).where(exists().where(User.id == user_id))
+        columns = ["user_id", "contest_id", "kind", "title", "target_date", "created_at"]
+        statement = _insert_for(self._session)(Notification).from_select(columns, values)
+        # psycopg 는 INSERT ... SELECT 의 rowcount 를 -1 로 줄 수 있어 넣은 행의 id 로 판단한다
+        inserted = self._session.scalar(
+            statement.on_conflict_do_nothing(
+                index_elements=["user_id", "contest_id", "kind"]
+            ).returning(Notification.id)
         )
+        return inserted is not None
 
     def commit(self) -> None:
         """더한 알림을 한 번에 저장한다."""
@@ -153,7 +167,12 @@ class NotificationRepository:
         return frozenset(NotificationKind(kind) for kind in rows)
 
     def replace_opt_outs(self, user_id: int, kinds: frozenset[NotificationKind]) -> None:
-        """회원이 끈 알림 종류를 통째로 바꾼다."""
+        """회원이 끈 알림 종류를 통째로 바꾼다.
+
+        같은 회원의 교체가 동시에 오면 두 요청 값이 섞일 수 있어, 회원 행을 잠가 차례로 한다.
+        끈 종류가 아직 하나도 없어도 잠기도록 설정 행이 아니라 회원 행을 잠근다.
+        """
+        self._session.execute(select(User.id).where(User.id == user_id).with_for_update())
         self._session.execute(
             delete(NotificationOptOut).where(NotificationOptOut.user_id == user_id)
         )
