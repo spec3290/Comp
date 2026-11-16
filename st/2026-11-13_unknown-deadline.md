@@ -62,3 +62,8 @@
 | `uv run lint-imports` | 3 kept, 0 broken |
 | `uv run pytest` | 315 passed, 32 skipped (Mongo 통합, 로컬 URI 없음) |
 | comp-fe `npm run lint` / `npm run build` | 통과 |
+
+## 추가 수정 (2026-11-16, CodeRabbit 리뷰 반영, PR #59에서 지적)
+- **`closes_on` 백필이 동시 저장의 최신 값을 덮어쓸 수 있었다.** 갱신 조건이 `_id`만 봤기 때문이다. `closes_on`이 아직 없을 때만 쓰도록 조건을 더했다. 테스트 `test_backfill_keeps_closes_on_written_by_concurrent_save`.
+- **날짜가 하나도 없는 단일 출처 대회는 소스가 내려도 남았다.** `prune_missing`은 단일 출처를 건너뛰고, 날짜 기준 삭제(Q-3)에도 걸리지 않아 목록에 영원히 남았다. 이제 소스가 내리면 `rev` 조건으로 문서를 지운다(Q-35 문구 보강). 날짜가 있는 단일 출처는 전과 같이 마감 삭제까지 둔다. 테스트 2건을 추가했다(지움, 아직 올라 있으면 둠).
+- 검사: ruff·mypy·lint-imports 통과. 로컬에 임시 `mongo:7`을 띄워 `MONGODB_TEST_URI`로 Mongo 통합 테스트까지 돌렸다(350 passed). 새 테스트 두 건은 수정 전 코드에서 실패하는 것을 확인했다.

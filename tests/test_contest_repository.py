@@ -559,3 +559,56 @@ def test_ensure_indexes_backfills_closes_on(mongo_db: Database[Document]) -> Non
     indexes = mongo_db[COLLECTION].index_information()
     assert "apply_end_1" not in indexes
     assert "closes_on_1" in indexes
+
+
+@pytest.mark.feature("F2-3")
+def test_backfill_keeps_closes_on_written_by_concurrent_save(
+    mongo_db: Database[Document], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """백필이 읽은 뒤 다른 저장이 참가 마지막 날을 쓰면 그 값을 덮어쓰지 않는다 (Q-35)."""
+    collection = mongo_db[COLLECTION]
+    collection.insert_one(_legacy_doc("a", []))
+    repo = ContestRepository(mongo_db)
+    newer = datetime(2026, 11, 30, tzinfo=KST)
+    original_find = repo._contests.find
+
+    def find_then_save(*args: Any, **kwargs: Any) -> list[Document]:
+        """문서를 읽은 직후 다른 저장이 마감일을 연장한 상황을 만든다."""
+        docs = list(original_find(*args, **kwargs))
+        collection.update_many({}, {"$set": {"closes_on": newer}})
+        return docs
+
+    monkeypatch.setattr(repo._contests, "find", find_then_save)
+    repo._backfill_closes_on()
+
+    doc = collection.find_one({})
+    assert doc is not None
+    assert doc["closes_on"] == newer
+
+
+@pytest.mark.feature("F2-2")
+def test_prune_missing_deletes_dateless_single_source_contest(
+    mongo_db: Database[Document],
+) -> None:
+    """날짜 없는 단일 출처 대회는 소스가 내리면 지운다. 날짜가 있으면 마감 삭제까지 둔다."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("code4korea", title="일시 미정 해커톤", apply_start=None, apply_end=None))
+    _save(repo, _contest("code4korea", title="날짜 있는 해커톤"))
+
+    assert repo.prune_missing("code4korea", set(), now_kst()) == 1
+
+    titles = [d["title"] for d in mongo_db[COLLECTION].find()]
+    assert titles == ["날짜 있는 해커톤"]
+
+
+@pytest.mark.feature("F2-2")
+def test_prune_missing_keeps_dateless_contest_still_listed(mongo_db: Database[Document]) -> None:
+    """소스가 아직 올려 둔 날짜 없는 대회는 지우지 않는다."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    contest = _contest("code4korea", title="일시 미정 해커톤", apply_start=None, apply_end=None)
+    _save(repo, contest)
+
+    assert repo.prune_missing("code4korea", {contest.source_url}, now_kst()) == 0
+    assert mongo_db[COLLECTION].count_documents({}) == 1

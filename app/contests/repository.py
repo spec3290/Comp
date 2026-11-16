@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from app.contests.models import Bookmark, ContestClick
 from app.contests.rules import (
     NO_TAGS,
+    OPEN_ENDED,
     ApplyPeriod,
     ContestQuery,
     ContestStatus,
@@ -345,8 +346,10 @@ class ContestRepository:
                 _to_date(doc.get("event_start")),
                 _to_date(doc.get("event_end")),
             )
+            # 읽은 뒤 다른 저장이 이미 채웠으면 그 최신 값을 둔다
             self._contests.update_one(
-                {"_id": doc["_id"]}, {"$set": {"closes_on": _to_datetime(period.closes_on)}}
+                {"_id": doc["_id"], "closes_on": {"$exists": False}},
+                {"$set": {"closes_on": _to_datetime(period.closes_on)}},
             )
 
     def _drop_duplicate_listings(self) -> None:
@@ -468,10 +471,11 @@ class ContestRepository:
     def prune_missing(self, source: str, seen_urls: set[str], now: datetime) -> int:
         """성공한 수집에서 빠진 출처를 묶음에서 뺀다. 출처가 하나뿐이면 마감 삭제(Q-3)까지 둔다.
 
+        날짜가 하나도 없는 단일 출처 대회는 마감 삭제에 걸리지 않으므로 이때 지운다 (Q-35).
         뺀 출처 수를 돌려준다. 그 사이 다른 저장이 문서를 바꿨으면 그 문서는 다음 수집으로 미룬다.
         """
         stale = {"source": source, "source_url": {"$nin": sorted(seen_urls)}}
-        removed = 0
+        removed = self._delete_dateless(stale)
         query = {"sources": {"$elemMatch": stale}, "sources.1": {"$exists": True}}
         for doc in self._contests.find(query):
             kept = [
@@ -483,6 +487,19 @@ class ContestRepository:
                 continue
             removed += len(doc["sources"]) - len(kept)
         return removed
+
+    def _delete_dateless(self, stale: dict[str, Any]) -> int:
+        """소스가 내린 날짜 없는 단일 출처 대회를 지우고 지운 수를 돌려준다 (Q-35)."""
+        query = {
+            "sources": {"$elemMatch": stale},
+            "sources.1": {"$exists": False},
+            "closes_on": _to_datetime(OPEN_ENDED),
+        }
+        deleted = 0
+        for doc in self._contests.find(query, {"rev": 1}):
+            result = self._contests.delete_one({"_id": doc["_id"], "rev": doc.get("rev", 0)})
+            deleted += result.deleted_count
+        return deleted
 
     def find(self, query: ContestQuery, today: date) -> tuple[list[ContestRecord], int]:
         """조건에 맞는 한 페이지와 전체 건수."""
