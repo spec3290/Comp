@@ -2,6 +2,7 @@
 
 세미나·밋업까지 담은 행사 목록이라 이름·주제에 형식 단어가 있는 행사만 대회로 고른다 (Q-26).
 행사 일시는 하나뿐이고 '행사 시작시간 또는 모집 마감시간'이라 접수 마감일로 간주한다.
+일시가 비었거나 날짜가 아니면('미정') 마감일 미확인으로 수집한다 (Q-35).
 주최 열이 없어 주최는 비워 둔다. 페이지에 박힌 Sheets API 키는 쓰지 않고 공개 내보내기 주소를 쓴다.
 """
 
@@ -61,11 +62,11 @@ def parse_sheet(text: str) -> list[RawContest]:
     return convert_each(rows, _to_contest, NAME)
 
 
-def parse_date(text: str) -> date:
-    """시트의 '2026. 11. 9 오전 9:00:00' 같은 일시에서 날짜만 읽는다. 형식이 다르면 ValueError."""
+def parse_date(text: str) -> date | None:
+    """시트의 '2026. 11. 9 오전 9:00:00' 같은 일시에서 날짜만 읽는다. 날짜가 없으면 None."""
     match = _DATE.search(text)
     if match is None:
-        raise ValueError(f"code4korea: 일시 형식이 다르다: {text!r}")
+        return None
     year, month, day = (int(g) for g in match.groups())
     return date(year, month, day)
 

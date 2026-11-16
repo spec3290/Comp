@@ -33,9 +33,10 @@ def _contest(
     field: str = "AI",
     title: str = "2026 AI 해커톤",
     apply_start: date | None = date(2026, 10, 1),
-    apply_end: date = date(2026, 11, 1),
+    apply_end: date | None = date(2026, 11, 1),
     apply_url: str | None = "",
     tags: ContestTags = NO_TAGS,
+    event_end: date | None = None,
 ) -> Listing:
     """필드 값을 바꿔 가며 쓰는 테스트용 출처를 만든다."""
     return Listing(
@@ -45,7 +46,7 @@ def _contest(
         apply_start=apply_start,
         apply_end=apply_end,
         event_start=None,
-        event_end=None,
+        event_end=event_end,
         # 빈 문자열이면 소스별 기본 링크, None 이면 링크를 못 찾은 대회 (Q-29)
         apply_url=f"https://{source}.example.com" if apply_url == "" else apply_url,
         source=source,
@@ -496,3 +497,118 @@ def test_failed_merge_restores_absorbed_document(mongo_db: Database[Document]) -
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     assert sorted(s["source"] for s in docs[0]["sources"]) == ["code4korea", "dev_event"]
+
+
+@pytest.mark.feature("F2-3")
+def test_unknown_deadline_is_saved_as_null_and_listed_after_known(
+    mongo_db: Database[Document],
+) -> None:
+    """마감일 미확인 대회는 null 로 저장하고 마감 임박순에서 대회 끝나는 날로 줄 선다 (Q-35)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a", title="날짜 없음", apply_start=None, apply_end=None))
+    _save(repo, _contest("a", title="11월 말 대회", apply_end=None, event_end=date(2026, 11, 30)))
+    _save(repo, _contest("a", title="마감 확인", apply_end=date(2026, 11, 10)))
+
+    assert _titles(repo, ContestQuery()) == ["마감 확인", "11월 말 대회", "날짜 없음"]
+    doc = mongo_db[COLLECTION].find_one({"title": "11월 말 대회"})
+    assert doc is not None
+    assert doc["apply_end"] is None
+    assert doc["closes_on"].date() == date(2026, 11, 30)
+    record = repo.get(str(doc["_id"]))
+    assert record is not None
+    assert record.apply_end is None
+
+
+@pytest.mark.feature("F2-3")
+def test_unknown_deadline_closes_and_is_deleted_by_event_end(mongo_db: Database[Document]) -> None:
+    """마감일을 모르면 대회가 끝난 날 기준으로 마감·삭제한다. 날짜가 없으면 남긴다 (Q-35)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("a", title="끝난 대회", apply_end=None, event_end=date(2026, 10, 22)))
+    _save(repo, _contest("a", title="날짜 없음", apply_start=None, apply_end=None))
+
+    closed = ContestQuery(statuses=frozenset({ContestStatus.CLOSED}))
+    assert _titles(repo, closed) == ["끝난 대회"]
+    assert repo.delete_closed_before(date(2026, 10, 23)) == 1
+    assert _titles(repo, ContestQuery(statuses=frozenset(ContestStatus))) == ["날짜 없음"]
+
+
+@pytest.mark.feature("F2-2")
+def test_unknown_deadlines_from_other_sites_are_not_merged(mongo_db: Database[Document]) -> None:
+    """마감일을 모르는 다른 사이트 출처는 제목이 같아도 마감일로 합치지 않는다 (Q-35)."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+
+    assert _save(repo, _contest("a", apply_end=None)) is SaveOutcome.INSERTED
+    assert _save(repo, _contest("b", apply_end=None)) is SaveOutcome.INSERTED
+    assert mongo_db[COLLECTION].count_documents({}) == 2
+
+
+@pytest.mark.feature("F2-3")
+def test_ensure_indexes_backfills_closes_on(mongo_db: Database[Document]) -> None:
+    """참가 마지막 날이 없는 이전 문서에 채우고 마감일 인덱스를 바꾼다 (Q-35)."""
+    mongo_db[COLLECTION].create_index("apply_end")
+    mongo_db[COLLECTION].insert_one(_legacy_doc("a", []))
+
+    ContestRepository(mongo_db).ensure_indexes()
+
+    doc = mongo_db[COLLECTION].find_one({})
+    assert doc is not None
+    assert doc["closes_on"].date() == date(2026, 11, 1)
+    indexes = mongo_db[COLLECTION].index_information()
+    assert "apply_end_1" not in indexes
+    assert "closes_on_1" in indexes
+
+
+@pytest.mark.feature("F2-3")
+def test_backfill_keeps_closes_on_written_by_concurrent_save(
+    mongo_db: Database[Document], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """백필이 읽은 뒤 다른 저장이 참가 마지막 날을 쓰면 그 값을 덮어쓰지 않는다 (Q-35)."""
+    collection = mongo_db[COLLECTION]
+    collection.insert_one(_legacy_doc("a", []))
+    repo = ContestRepository(mongo_db)
+    newer = datetime(2026, 11, 30, tzinfo=KST)
+    original_find = repo._contests.find
+
+    def find_then_save(*args: Any, **kwargs: Any) -> list[Document]:
+        """문서를 읽은 직후 다른 저장이 마감일을 연장한 상황을 만든다."""
+        docs = list(original_find(*args, **kwargs))
+        collection.update_many({}, {"$set": {"closes_on": newer}})
+        return docs
+
+    monkeypatch.setattr(repo._contests, "find", find_then_save)
+    repo._backfill_closes_on()
+
+    doc = collection.find_one({})
+    assert doc is not None
+    assert doc["closes_on"] == newer
+
+
+@pytest.mark.feature("F2-2")
+def test_prune_missing_deletes_dateless_single_source_contest(
+    mongo_db: Database[Document],
+) -> None:
+    """날짜 없는 단일 출처 대회는 소스가 내리면 지운다. 날짜가 있으면 마감 삭제까지 둔다."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    _save(repo, _contest("code4korea", title="일시 미정 해커톤", apply_start=None, apply_end=None))
+    _save(repo, _contest("code4korea", title="날짜 있는 해커톤"))
+
+    assert repo.prune_missing("code4korea", set(), now_kst()) == 1
+
+    titles = [d["title"] for d in mongo_db[COLLECTION].find()]
+    assert titles == ["날짜 있는 해커톤"]
+
+
+@pytest.mark.feature("F2-2")
+def test_prune_missing_keeps_dateless_contest_still_listed(mongo_db: Database[Document]) -> None:
+    """소스가 아직 올려 둔 날짜 없는 대회는 지우지 않는다."""
+    repo = ContestRepository(mongo_db)
+    repo.ensure_indexes()
+    contest = _contest("code4korea", title="일시 미정 해커톤", apply_start=None, apply_end=None)
+    _save(repo, contest)
+
+    assert repo.prune_missing("code4korea", {contest.source_url}, now_kst()) == 0
+    assert mongo_db[COLLECTION].count_documents({}) == 1

@@ -173,3 +173,37 @@ def test_collected_contest_is_classified_before_save() -> None:
     assert by_title["Kiroween"] == ContestTags(
         field=frozenset({"개발"}), format=frozenset({"해커톤"})
     )
+
+
+@pytest.mark.feature("F2-3")
+def test_unknown_deadline_is_skipped_only_after_event_is_long_over() -> None:
+    """마감일을 모르면 대회가 끝난 날로 삭제 기준을 본다 (Q-35)."""
+    repo = FakeRepository()
+    unknown = replace(_contest("a", "마감일 미확인"), apply_end=None)
+    ended = replace(_contest("a", "오래전 끝남"), apply_end=None, event_end=date(2026, 10, 19))
+    running = replace(_contest("a", "진행 중"), apply_end=None, event_end=date(2026, 11, 30))
+
+    (result,) = collect([FakeSource("a", [unknown, ended, running])], repo, TODAY, RULES)
+
+    assert result.skipped == 1
+    assert [(c.title, c.apply_end) for c in repo.saved] == [
+        ("마감일 미확인", None),
+        ("진행 중", None),
+    ]
+
+
+@pytest.mark.feature("F2-1")
+def test_competition_without_deadline_is_saved_with_event_end() -> None:
+    """마감일을 못 찾은 경진대회는 분류 뒤 대회 마감일을 접수 마감일로 저장한다 (Q-35)."""
+    repo = FakeRepository()
+    contest = replace(
+        _contest("event_us", "데이터 분석 경진대회"),
+        apply_end=None,
+        event_start=date(2026, 10, 1),
+        event_end=date(2026, 11, 30),
+    )
+
+    collect([FakeSource("event_us", [contest])], repo, TODAY, RULES)
+
+    (saved,) = repo.saved
+    assert (saved.apply_start, saved.apply_end) == (date(2026, 10, 1), date(2026, 11, 30))

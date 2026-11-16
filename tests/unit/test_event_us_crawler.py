@@ -92,6 +92,23 @@ def test_event_us_keeps_only_it_contests_and_converts_dates_to_kst() -> None:
 
 
 @pytest.mark.feature("F2-1")
+def test_event_us_without_due_date_keeps_deadline_unknown() -> None:
+    """접수 마감이 없으면 행사 시작일로 채우지 않고 마감일 미확인으로 둔다 (Q-35)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """첫 검색어에만 마감 없는 대회를 돌려준다."""
+        found = (
+            [_event(1, register_due_date=None)] if request.url.params["query"] == QUERIES[0] else []
+        )
+        return httpx.Response(200, text=_search_page(found))
+
+    (contest,) = _source(handler).fetch()
+
+    assert contest.apply_end is None
+    assert contest.event_start == date(2026, 11, 20)
+
+
+@pytest.mark.feature("F2-1")
 def test_event_us_merges_queries_without_duplicates() -> None:
     """여러 검색어에 같은 행사가 걸려도 한 번만 수집한다."""
     queries: list[str] = []

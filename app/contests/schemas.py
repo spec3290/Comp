@@ -31,9 +31,11 @@ class ContestSummaryOut(BaseModel):
     host: str
     field: str
     status: ContestStatus
-    d_day: int
+    d_day: int | None  # 마감일을 모르면 null (Q-35)
     apply_start: date | None
-    apply_end: date
+    apply_end: (
+        date | None
+    )  # 못 찾았으면 null 이고 프론트는 '접수 마감일 미확인'으로 표시한다 (Q-35)
     event_start: date | None
     event_end: date | None
     apply_url: str | None  # null 이면 프론트가 '직접 검색해서 찾아 주세요' 안내를 띄운다 (Q-29)

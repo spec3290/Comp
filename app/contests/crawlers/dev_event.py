@@ -1,7 +1,7 @@
 """Dev Event 크롤러. 행사 목록 페이지의 __NEXT_DATA__ JSON 에서 '대회' 태그 행사만 고른다.
 
 페이지에는 이번 달부터 몇 달 치 행사가 실려 있다. event_time_type 이 RECRUIT 면 기간이
-모집(접수) 기간이고, DATE 면 행사 당일 일정이다.
+모집(접수) 기간이고, DATE 면 행사 일정이라 접수 마감일은 모른다 (Q-35).
 """
 
 from __future__ import annotations
@@ -62,8 +62,7 @@ def _to_contest(event: dict[str, Any]) -> RawContest | None:
         host=event["organizer"].strip(),
         field=", ".join(tag for tag in tags if tag not in NON_FIELD_TAGS),
         apply_start=start if recruit else None,
-        # 행사 당일 일정(DATE)만 있으면 시작일을 접수 마감으로 본다 (Q-14)
-        apply_end=end if recruit else start,
+        apply_end=end if recruit else None,
         event_start=None if recruit else start,
         event_end=None if recruit else end,
         apply_url=link,

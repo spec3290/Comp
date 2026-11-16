@@ -1,4 +1,4 @@
-"""목록 조건 → MongoDB 필터 변환 (F2-3). 상태는 저장하지 않고 오늘 날짜로 판정한다."""
+"""목록 조건 → MongoDB 필터 변환 (F2-3). 상태는 저장하지 않고 참가 마지막 날로 판정한다."""
 
 from datetime import date, datetime, time
 
@@ -13,11 +13,11 @@ MIDNIGHT = datetime.combine(TODAY, time.min, tzinfo=KST)
 OPEN = {
     "$and": [
         {"$or": [{"apply_start": None}, {"apply_start": {"$lte": MIDNIGHT}}]},
-        {"apply_end": {"$gte": MIDNIGHT}},
+        {"closes_on": {"$gte": MIDNIGHT}},
     ]
 }
 UPCOMING = {"apply_start": {"$gt": MIDNIGHT}}
-CLOSED = {"apply_end": {"$lt": MIDNIGHT}}
+CLOSED = {"closes_on": {"$lt": MIDNIGHT}}
 
 
 @pytest.mark.feature("F2-3")

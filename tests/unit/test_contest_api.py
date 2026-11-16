@@ -39,7 +39,7 @@ UPDATED_AT = datetime(2026, 10, 22, 6, 0, tzinfo=KST)
 def _record(
     contest_id: str,
     apply_start: date | None,
-    apply_end: date,
+    apply_end: date | None,
     tags: ContestTags = NO_TAGS,
 ) -> ContestRecord:
     """접수 기간·태그만 다른 테스트용 대회."""
@@ -95,6 +95,7 @@ def repo() -> FakeRepository:
             ),
             _record("b", date(2026, 11, 1), date(2026, 11, 30)),
             _record("c", None, date(2026, 10, 23)),
+            _record("d", None, None),
         ],
         total=45,
     )
@@ -150,6 +151,12 @@ def test_list_computes_status_and_d_day(client: TestClient) -> None:
     assert (items["b"]["status"], items["b"]["d_day"]) == ("upcoming", 38)
     # 시작일이 없으면 접수 중, 마감 당일은 D-0 (Q-6)
     assert (items["c"]["status"], items["c"]["d_day"]) == ("open", 0)
+    # 마감일을 못 찾았으면 null 로 내려 프론트가 '접수 마감일 미확인'을 띄운다 (Q-35)
+    assert (items["d"]["status"], items["d"]["d_day"], items["d"]["apply_end"]) == (
+        "open",
+        None,
+        None,
+    )
     assert {"sources", "updated_at", "bookmarked"}.isdisjoint(items["a"])
 
 

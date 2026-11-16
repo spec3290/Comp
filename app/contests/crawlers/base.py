@@ -28,7 +28,7 @@ class RawContest:
     host: str
     field: str
     apply_start: date | None
-    apply_end: date
+    apply_end: date | None  # 접수 마감일. 소스에서 못 찾으면 None 이고 대체 값을 넣지 않는다 (Q-35)
     event_start: date | None
     event_end: date | None
     apply_url: str | None  # 공식 참가 URL. 못 찾으면 None 이고 대회는 그대로 수집한다 (Q-29)

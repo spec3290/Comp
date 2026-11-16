@@ -91,14 +91,13 @@ class EventUsSource:
         page_url = EVENT_URL.format(subdomain=item["subdomain"], event_id=item["id"])
         apply_url = self._apply_url(item["reception_type"], page_url)
         start = item.get("register_start_date")
-        # 접수 마감이 없으면 행사 시작일을 접수 마감으로 본다 (Q-14와 같은 방식)
-        due = item.get("register_due_date") or item["start_date"]
+        due = item.get("register_due_date")  # 없으면 마감일 미확인 (Q-35)
         return RawContest(
             title=item["title"].strip(),
             host=item["app_title"].strip(),
             field=", ".join(_field_tags(item)),
             apply_start=_kst_date(start) if start else None,
-            apply_end=_kst_date(due),
+            apply_end=_kst_date(due) if due else None,
             event_start=_kst_date(item["start_date"]),
             event_end=_kst_date(item["close_date"]),
             apply_url=apply_url,

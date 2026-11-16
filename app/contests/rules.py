@@ -22,6 +22,8 @@ _NON_WORD = re.compile(r"[\W_]+")
 
 # 접수 마감 후 이 일수가 지나면 삭제한다 (Q-3)
 RETENTION_DAYS_AFTER_CLOSE = 3
+# 날짜가 하나도 없는 대회의 참가 마지막 날. 마감되지 않고 마감 임박순에서 맨 뒤에 온다 (Q-35)
+OPEN_ENDED = date.max
 
 
 class ContestStatus(StrEnum):
@@ -37,19 +39,30 @@ class ApplyPeriod:
     """접수 기간. 상태와 D-day 를 날짜로 계산한다."""
 
     start: date | None  # 없으면 이미 접수 중으로 본다 (Q-6)
-    end: date
+    end: date | None  # 소스에서 못 찾으면 None. 화면은 '접수 마감일 미확인' (Q-35)
+    event_start: date | None = None
+    event_end: date | None = None
+
+    @property
+    def closes_on(self) -> date:
+        """참가할 수 있는 마지막 날. 마감 판정·삭제·마감 임박순 정렬의 기준이다 (Q-35).
+
+        접수 마감일을 모르면 대회가 끝난 뒤(끝나는 날이 없으면 시작한 뒤)에는 참가할 수 없다고 본다.
+        이 날짜는 마감일로 보여 주지 않는다. 날짜가 하나도 없으면 소스가 내릴 때까지 남는다(Q-2).
+        """
+        return self.end or self.event_end or self.event_start or OPEN_ENDED
 
     def status(self, today: date) -> ContestStatus:
         """기준 날짜의 접수 상태를 계산한다."""
         if self.start is not None and today < self.start:
             return ContestStatus.UPCOMING
-        if today > self.end:
+        if today > self.closes_on:
             return ContestStatus.CLOSED
         return ContestStatus.OPEN
 
-    def d_day(self, today: date) -> int:
-        """접수 마감까지 남은 일수. 마감 당일 0, 지나면 음수."""
-        return (self.end - today).days
+    def d_day(self, today: date) -> int | None:
+        """접수 마감까지 남은 일수. 마감 당일 0, 지나면 음수, 마감일을 모르면 None."""
+        return None if self.end is None else (self.end - today).days
 
 
 class SortOrder(StrEnum):
@@ -281,11 +294,15 @@ class Listing:
     host: str
     field: str
     apply_start: date | None
-    apply_end: date
+    apply_end: date | None  # 소스에서 못 찾으면 None (Q-35)
     event_start: date | None
     event_end: date | None
     apply_url: str | None
     tags: ContestTags = NO_TAGS
+
+    def period(self) -> ApplyPeriod:
+        """이 출처 값의 접수 기간."""
+        return ApplyPeriod(self.apply_start, self.apply_end, self.event_start, self.event_end)
 
 
 def source_rank(source: str) -> tuple[int, str]:
@@ -320,14 +337,16 @@ def same_contest(a: Listing, b: Listing) -> bool:
 
     같은 사이트면 원문 식별자가 같을 때만 같다. 다른 사이트면 제목이 겹치고, 공식 참가 URL
     또는 마감일이 같아야 한다. URL 만으로 합치지 않는 것은 예선·본선이 홈페이지를 같이 쓰기
-    때문이다.
+    때문이다. 마감일을 모르는 출처끼리는 마감일이 같다고 보지 않는다 (Q-35).
     """
     if a.source == b.source:
         return a.source_url == b.source_url
     if not titles_overlap(a.title, b.title):
         return False
     key = url_key(a.apply_url)
-    return (key is not None and key == url_key(b.apply_url)) or a.apply_end == b.apply_end
+    if key is not None and key == url_key(b.apply_url):
+        return True
+    return a.apply_end is not None and a.apply_end == b.apply_end
 
 
 def belongs_to(listing: Listing, bundle: Sequence[Listing]) -> bool:
@@ -348,17 +367,21 @@ def refresh(old: Listing | None, new: Listing) -> Listing:
 def resolve(bundle: Sequence[Listing]) -> Listing:
     """묶음에서 보여 줄 값을 고른다 (Q-2). 실행 순서와 상관없이 결과가 같다.
 
-    제목·원문·접수 기간은 우선순위가 가장 높은 출처(대표)의 값이다. 주최·분야 원문·참가 링크·대회
-    기간은 비어 있지 않은 값 중 앞선 출처의 것, 분류 태그는 모든 출처의 합집합이다.
+    제목·원문은 우선순위가 가장 높은 출처(대표)의 값이다. 접수 기간은 마감일을 찾은 출처 중 앞선
+    출처의 것이고, 아무도 못 찾았으면 대표의 값이다 (Q-35). 주최·분야 원문·참가 링크·대회 기간은
+    비어 있지 않은 값 중 앞선 출처의 것, 분류 태그는 모든 출처의 합집합이다.
     """
     ordered = sorted(bundle, key=lambda listing: source_rank(listing.source))
     top = ordered[0]
+    applied = next((x for x in ordered if x.apply_end is not None), top)
     event = next((x for x in ordered if x.event_start or x.event_end), top)
     tags = ContestTags(
         **{d.value: frozenset().union(*(x.tags.get(d) for x in ordered)) for d in Dimension}
     )
     return replace(
         top,
+        apply_start=applied.apply_start,
+        apply_end=applied.apply_end,
         host=next((x.host for x in ordered if x.host), ""),
         field=next((x.field for x in ordered if x.field), ""),
         apply_url=next((x.apply_url for x in ordered if x.apply_url), None),
@@ -368,6 +391,22 @@ def resolve(bundle: Sequence[Listing]) -> Listing:
     )
 
 
+def fill_competition_deadline(listing: Listing) -> Listing:
+    """접수 마감일을 못 찾은 경진대회는 대회 마감일을 접수 마감일로 쓴다 (Q-35).
+
+    경진대회는 대회 기간 중이면 언제든 참가할 수 있다(Q-6, DACON 과 같은 방식). 다른 형식은 둔다.
+    """
+    if listing.apply_end is not None or listing.event_end is None:
+        return listing
+    if ContestFormat.COMPETITION not in listing.tags.format:
+        return listing
+    return replace(
+        listing,
+        apply_start=listing.apply_start or listing.event_start,
+        apply_end=listing.event_end,
+    )
+
+
 def purge_cutoff(today: date) -> date:
-    """접수 마감일이 이 날짜보다 이르면 삭제 대상이다. 마감 뒤 3일은 '마감'으로 남는다 (Q-3)."""
+    """참가 마지막 날(ApplyPeriod.closes_on)이 이보다 이르면 지운다. 마감 뒤 3일은 남긴다 (Q-3)."""
     return today - timedelta(days=RETENTION_DAYS_AFTER_CLOSE)

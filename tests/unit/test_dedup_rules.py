@@ -13,6 +13,7 @@ from app.contests.rules import (
     ContestTags,
     Listing,
     belongs_to,
+    fill_competition_deadline,
     refresh,
     resolve,
     same_contest,
@@ -218,3 +219,62 @@ def test_refresh_keeps_found_apply_url_when_recollect_misses_it() -> None:
         refresh(old, replace(old, apply_url="https://new.example.com")).apply_url
         == "https://new.example.com"
     )
+
+
+@pytest.mark.feature("F2-2")
+def test_unknown_deadlines_are_not_the_same_deadline() -> None:
+    """마감일을 모르는 출처끼리는 제목이 같아도 마감일로 합치지 않는다 (Q-35)."""
+    a = _listing("dev_event", "AI 해커톤", apply_end=None)
+    b = _listing("code4korea", "AI 해커톤", apply_end=None)
+    assert not same_contest(a, b)
+    # 참가 URL 이 같으면 마감일을 몰라도 같은 대회다
+    url = "https://ai-hackathon.kr"
+    assert same_contest(replace(a, apply_url=url), replace(b, apply_url=url))
+
+
+@pytest.mark.feature("F2-2")
+def test_apply_period_comes_from_first_source_that_found_a_deadline() -> None:
+    """대표가 마감일을 못 찾았으면 마감일을 찾은 다음 출처의 접수 기간을 쓴다 (Q-35)."""
+    top = _listing("event_us", "AI 해커톤", apply_end=None)
+    other = _listing("dev_event", "AI 해커톤", apply_start=date(2026, 11, 1))
+    for bundle in permutations([top, other]):
+        shown = resolve(bundle)
+        assert (shown.source, shown.title) == ("event_us", "AI 해커톤")
+        assert (shown.apply_start, shown.apply_end) == (date(2026, 11, 1), END)
+
+
+@pytest.mark.feature("F2-2")
+def test_apply_period_stays_unknown_when_no_source_found_it() -> None:
+    """아무 출처도 마감일을 못 찾았으면 미확인으로 둔다."""
+    shown = resolve(
+        [_listing("event_us", "A", apply_end=None), _listing("dev_event", "A", apply_end=None)]
+    )
+    assert shown.apply_end is None
+
+
+@pytest.mark.feature("F2-1")
+def test_competition_without_deadline_uses_event_end() -> None:
+    """마감일을 못 찾은 경진대회는 대회 기간 중 참가할 수 있어 대회 마감일을 쓴다 (Q-35)."""
+    competition = _listing(
+        "event_us",
+        "데이터 경진대회",
+        apply_end=None,
+        event_start=date(2026, 11, 1),
+        event_end=date(2026, 11, 30),
+        tags=ContestTags(format=frozenset({"경진대회"})),
+    )
+    filled = fill_competition_deadline(competition)
+    assert (filled.apply_start, filled.apply_end) == (date(2026, 11, 1), date(2026, 11, 30))
+
+
+@pytest.mark.feature("F2-1")
+def test_only_competitions_without_deadline_are_filled() -> None:
+    """다른 형식·마감일을 찾은 대회·대회 마감일이 없는 경진대회는 그대로 둔다."""
+    competition = ContestTags(format=frozenset({"경진대회"}))
+    unchanged = [
+        _listing("event_us", "A 해커톤", apply_end=None, event_end=date(2026, 11, 30)),
+        _listing("event_us", "B", event_end=date(2026, 11, 30), tags=competition),
+        _listing("event_us", "C", apply_end=None, tags=competition),
+    ]
+    for listing in unchanged:
+        assert fill_competition_deadline(listing) == listing

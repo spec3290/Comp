@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from app.contests.rules import ApplyPeriod, ContestStatus, purge_cutoff
+from app.contests.rules import OPEN_ENDED, ApplyPeriod, ContestStatus, purge_cutoff
 
 PERIOD = ApplyPeriod(start=date(2026, 11, 1), end=date(2026, 11, 10))
 
@@ -46,3 +46,37 @@ def test_closed_contest_is_kept_for_three_days() -> None:
     deadline = date(2026, 11, 10)
     assert not deadline < purge_cutoff(date(2026, 11, 13))
     assert deadline < purge_cutoff(date(2026, 11, 14))
+
+
+@pytest.mark.feature("F2-3")
+def test_unknown_deadline_has_no_d_day_and_closes_after_event() -> None:
+    """마감일을 모르면 D-day 가 없고, 대회가 끝난 다음 날부터 마감이다 (Q-35)."""
+    period = ApplyPeriod(None, None, event_start=date(2026, 11, 20), event_end=date(2026, 11, 21))
+    assert period.d_day(date(2026, 11, 1)) is None
+    assert period.closes_on == date(2026, 11, 21)
+    assert period.status(date(2026, 11, 21)) == ContestStatus.OPEN
+    assert period.status(date(2026, 11, 22)) == ContestStatus.CLOSED
+
+
+@pytest.mark.feature("F2-3")
+def test_unknown_deadline_without_event_end_closes_after_event_start() -> None:
+    """대회 끝나는 날도 없으면 시작한 다음 날부터 마감이다 (Q-35)."""
+    period = ApplyPeriod(None, None, event_start=date(2026, 11, 20))
+    assert period.status(date(2026, 11, 21)) == ContestStatus.CLOSED
+
+
+@pytest.mark.feature("F2-3")
+def test_contest_without_any_date_stays_open() -> None:
+    """날짜가 하나도 없으면 마감되지 않고 삭제 기준에도 걸리지 않는다 (Q-35)."""
+    period = ApplyPeriod(None, None)
+    assert period.closes_on == OPEN_ENDED
+    assert period.status(date(2030, 1, 1)) == ContestStatus.OPEN
+    assert not period.closes_on < purge_cutoff(date(2030, 1, 1))
+
+
+@pytest.mark.feature("F2-3")
+def test_known_deadline_wins_over_event_dates() -> None:
+    """마감일이 있으면 대회 기간과 상관없이 마감일로 판정한다."""
+    period = ApplyPeriod(None, date(2026, 11, 10), event_end=date(2026, 11, 30))
+    assert period.closes_on == date(2026, 11, 10)
+    assert period.status(date(2026, 11, 11)) == ContestStatus.CLOSED
