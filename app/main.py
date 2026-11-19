@@ -18,6 +18,7 @@ from app.core.kv import close_redis
 from app.core.log_redaction import install_log_redaction
 from app.core.sql import dispose_engine
 from app.health import router as health_router
+from app.notifications.router import router as notifications_router
 
 
 @asynccontextmanager
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     application.include_router(users_router)
     application.include_router(contests_router)
     application.include_router(my_contests_router)
+    application.include_router(notifications_router)
     return application
 
 
