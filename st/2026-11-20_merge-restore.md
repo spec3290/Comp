@@ -31,8 +31,8 @@ PR #61 CodeRabbit 리뷰: `ContestRepository._merge`는 흡수할 중복 문서�
 ### 실행한 검사
 | 검사 | 결과 |
 |---|---|
-| `uv run ruff format --check .` / `uv run ruff check .` | 로컬에 `uv`가 없어 실행하지 못함. CI에서 확인 |
-| `uv run mypy` | 같음 |
-| `uv run lint-imports` | 같음 |
-| `uv run pytest` | 같음 (MongoDB 통합 테스트는 CI mongo:7 서비스) |
-| `python scripts/check_conventions.py` | CI에서 확인 |
+| `uv run ruff format --check .` / `uv run ruff check .` | 로컬에 `uv`가 없어 CI에서 확인: 통과 |
+| `uv run mypy` | CI 통과 |
+| `uv run lint-imports` | CI 통과 |
+| `uv run pytest` | CI 첫 실행에서 새 테스트 실패: 비교 기준을 `ensure_indexes()`(이전 구조 문서 이전) 전에 떠서 문서 모양이 달랐다. 기준을 그 뒤로 옮겨 CI 통과 |
+| `python scripts/check_conventions.py` | CI 통과 |
