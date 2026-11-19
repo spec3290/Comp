@@ -1,6 +1,8 @@
 name: comp
 
 # 로컬 개발용. 다른 로컬 프로젝트와 겹치지 않게 호스트 포트를 기본값에서 옮겼다.
+# `docker compose up` 은 DB(PostgreSQL·Redis)만 띄운다. 배포 이미지(Dockerfile)를 로컬 DB에 붙여 보려면
+# `docker compose --profile app up --build` (migrate 가 끝난 뒤 api 가 뜬다).
 services:
   postgres:
     image: postgres:17-alpine
@@ -31,6 +33,43 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # 배포 이미지로 스키마 마이그레이션을 한 번 돌리고 끝난다 (Q-37: 기동 때 자동 실행하지 않음)
+  migrate:
+    profiles: [app]
+    build: .
+    image: comp:local
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
+    environment: &app-db
+      # 컨테이너 안의 127.0.0.1 은 자기 자신이라 DB 는 서비스 이름으로 붙는다
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contest}:${POSTGRES_PASSWORD:-contest}@postgres:5432/${POSTGRES_DB:-contest}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # 배포 이미지로 띄운 API. MONGODB_URI 는 .env 값을 쓰고, 호스트의 MongoDB 는 host.docker.internal 로 닿는다
+  api:
+    profiles: [app]
+    image: comp:local
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
