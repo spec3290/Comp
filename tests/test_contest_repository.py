@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from pymongo.database import Database
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import AutoReconnect, DuplicateKeyError
 
 from app.contests.repository import (
     COLLECTION,
@@ -497,6 +497,32 @@ def test_failed_merge_restores_absorbed_document(mongo_db: Database[Document]) -
     docs = list(mongo_db[COLLECTION].find())
     assert len(docs) == 1
     assert sorted(s["source"] for s in docs[0]["sources"]) == ["code4korea", "dev_event"]
+
+
+class _BrokenWriteRepository(ContestRepository):
+    """합친 문서 쓰기가 경합이 아닌 연결 오류로 실패하는 저장소."""
+
+    def _write(
+        self, base: Document, sources: list[dict[str, Any]], now: datetime, *, saved: str
+    ) -> None:
+        """늘 AutoReconnect 를 던진다."""
+        raise AutoReconnect("연결 끊김")
+
+
+@pytest.mark.feature("F2-2")
+def test_merge_failing_with_other_error_restores_absorbed_document(
+    mongo_db: Database[Document],
+) -> None:
+    """합친 문서를 쓰다 경합 외 오류가 나도 지운 중복 문서를 되살리고 원래 오류를 던진다."""
+    mongo_db[COLLECTION].insert_many([_legacy_doc("dev_event", []), _legacy_doc("code4korea", [])])
+    before = sorted(mongo_db[COLLECTION].find(), key=lambda d: d["_id"])
+    repo = _BrokenWriteRepository(mongo_db)
+    repo.ensure_indexes()
+
+    with pytest.raises(AutoReconnect):
+        _save(repo, _contest("dev_event"))
+
+    assert sorted(mongo_db[COLLECTION].find(), key=lambda d: d["_id"]) == before
 
 
 @pytest.mark.feature("F2-3")
