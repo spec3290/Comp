@@ -11,7 +11,8 @@
 ## 바뀐 것
 - `Dockerfile`: 2단계 빌드. 1단계에서 `uv sync --locked --no-dev --no-install-project`로 `uv.lock` 그대로 운영 의존성만 `/opt/venv`에 설치하고, 2단계는 `python:3.13-slim-bookworm`에 가상환경·`app/`·`migrations/`·`alembic.ini`만 복사한다. non-root(uid 10001)로 `uvicorn app.main:app`을 8000 포트에 띄우고 `/health`로 HEALTHCHECK 한다. 같은 이미지로 `alembic upgrade head`, `python -m app.contests.collect`를 돌릴 수 있다.
 - `.dockerignore`: `.env`·`.env.*`가 빌드 컨텍스트에 들어가지 않게 막고, 테스트·문서·리뷰 기록·캐시를 뺀다.
-- `.github/workflows/ci.yml`: `image` 잡 추가. 이미지를 빌드하고, 임시 `JWT_SECRET`만 주고 컨테이너를 띄워 `/health` 200을 확인하고, 마이그레이션·수집 진입점이 이미지 안에서 import되는지 본다. 기존 잡은 그대로다.
+- `.github/workflows/ci.yml`: `image` 잡 추가. 이미지를 빌드하고, 임시 `JWT_SECRET`만 주고 컨테이너를 띄워 `/health` 200을 확인하고, 마이그레이션·수집 진입점이 이미지 안에서 import되는지 본다. 이어서 compose `app` 프로필을 띄워 실제 PostgreSQL에 마이그레이션이 걸리고 API가 healthy가 되는지 확인한다. 기존 잡은 그대로다.
+- `docker-compose.yml`: `app` 프로필에 `migrate`(alembic upgrade head 후 종료)와 `api`(migrate 성공 뒤 기동, `127.0.0.1:8000`)를 추가했다. DB 주소는 서비스 이름(`postgres`, `redis`)으로 덮어쓰고 나머지는 `.env`(없어도 됨)에서 읽는다. 프로필이 없으면 기존처럼 DB만 뜬다. (사용자 질문: compose도 고쳐야 하지 않나)
 - `README.md`: 빌드·마이그레이션·실행·수집 명령과 컨테이너 안 `127.0.0.1` 주의.
 - `docs/decisions.md`: Q-36 추가.
 
@@ -21,6 +22,7 @@
 - 없음
 
 ### 권장
+- MongoDB는 compose에 없다(CI는 mongo:7 서비스, 수집은 Atlas). compose `api`는 `.env`의 `MONGODB_URI`를 그대로 쓰므로 로컬 MongoDB라면 `host.docker.internal`로 적어야 한다.
 - 배포 대상이 정해지면(Q-36) 레지스트리 push 워크플로와 운영용 실행 설정(워커 수, 프록시 뒤라면 `--proxy-headers`/`--forwarded-allow-ips`)을 추가한다.
 - `uv` 이미지 버전(0.8.15)과 베이스 이미지는 고정 태그다. 보안 패치를 받으려면 주기적으로 올린다.
 
@@ -42,4 +44,5 @@
 | `uv run lint-imports` | 같음 |
 | `uv run pytest` | 같음 |
 | `docker build` / 컨테이너 `/health` | 로컬에 `docker`가 없어 실행하지 못함. CI `image` 잡에서 확인 |
+| `docker compose --profile app up --wait api` | 같음. CI `image` 잡에서 확인 |
 | `python scripts/check_conventions.py` | CI에서 확인 |

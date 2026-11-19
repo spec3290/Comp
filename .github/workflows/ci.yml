@@ -65,6 +65,16 @@ jobs:
         run: |
           docker run --rm comp:ci alembic --help > /dev/null
           docker run --rm comp:ci python -c "import app.contests.collect"
+      # docker-compose.yml 의 app 프로필: 실제 PostgreSQL 에 마이그레이션을 걸고 그 뒤에 API 가 뜨는지 본다
+      - name: compose app 프로필로 마이그레이션과 API 기동 확인
+        run: |
+          docker rm -f comp  # 앞 단계 컨테이너가 8000 포트를 쥐고 있다
+          echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" > .env
+          docker compose --profile app up -d --build --wait api \
+            || { docker compose --profile app logs; exit 1; }
+          curl -fsS http://127.0.0.1:8000/health
+          docker compose --profile app logs migrate
+          docker compose --profile app down -v
 
   conventions:
     name: git conventions
