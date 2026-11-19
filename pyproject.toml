@@ -63,7 +63,7 @@ id = "AC-3"
 name = "AC-3 core는 기능 패키지를 import하지 않는다"
 type = "forbidden"
 source_modules = ["app.core"]
-forbidden_modules = ["app.contests", "app.auth"]
+forbidden_modules = ["app.contests", "app.auth", "app.notifications"]
 
 # ──────────────────────────────────────────────────────────────
 # 린트 / 타입 / 테스트

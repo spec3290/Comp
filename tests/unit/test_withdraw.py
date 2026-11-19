@@ -16,7 +16,10 @@ from app.auth.models import UserInterestField
 from app.auth.oauth import OAuthFailedError, OAuthUnavailableError
 from app.auth.service import WITHDRAW_STATE_TTL
 from app.contests.models import Bookmark
+from app.core.sql import Base
 from app.core.time import now_kst
+from app.notifications.models import Notification, NotificationOptOut
+from app.notifications.rules import NotificationKind
 from tests.unit.auth_support import (
     WITHDRAW_FRONTEND_URL,
     FakeProvider,
@@ -48,7 +51,7 @@ def _callback(client: TestClient, state: str | None, code: str | None = "code-a"
     return {key: values[0] for key, values in parse_qs(urlsplit(location).query).items()}
 
 
-def _count(session: Session, model: type[Bookmark] | type[UserInterestField]) -> int:
+def _count(session: Session, model: type[Base]) -> int:
     """테이블의 행 수."""
     return session.scalar(select(func.count()).select_from(model)) or 0
 
@@ -75,12 +78,23 @@ def test_withdrawal_start_returns_reauth_url_with_one_time_state(
 def test_withdrawal_revokes_provider_and_deletes_user_with_personal_data(
     client: TestClient, session: Session, provider: FakeProvider
 ) -> None:
-    """재인증한 계정이 맞으면 연결을 해제하고 회원·프로필·관심 분야·북마크를 지운다."""
+    """재인증한 계정이 맞으면 연결을 해제하고 회원·프로필·관심 분야·북마크·알림을 지운다."""
     tokens = login(client)
     headers = bearer(tokens["access_token"])
     assert client.put("/users/me/profile", json=PROFILE, headers=headers).status_code == 200
     user_id = int(str(claims(tokens["access_token"])["sub"]))
     session.add(Bookmark(user_id=user_id, contest_id="c" * 24, created_at=now_kst()))
+    session.add(
+        Notification(
+            user_id=user_id,
+            contest_id="c" * 24,
+            kind=NotificationKind.DEADLINE_D7.value,
+            title="대회",
+            target_date=now_kst().date(),
+            created_at=now_kst(),
+        )
+    )
+    session.add(NotificationOptOut(user_id=user_id, kind=NotificationKind.DEADLINE_D1.value))
     session.commit()
 
     params = _callback(client, _start(client, tokens["access_token"]))
@@ -90,6 +104,8 @@ def test_withdrawal_revokes_provider_and_deletes_user_with_personal_data(
     assert user_count(session) == 0
     assert _count(session, UserInterestField) == 0
     assert _count(session, Bookmark) == 0
+    assert _count(session, Notification) == 0
+    assert _count(session, NotificationOptOut) == 0
 
 
 @pytest.mark.feature("F1-8")

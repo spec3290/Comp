@@ -35,7 +35,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # 배포 이미지로 스키마 마이그레이션을 한 번 돌리고 끝난다 (Q-36: 기동 때 자동 실행하지 않음)
+  # 배포 이미지로 스키마 마이그레이션을 한 번 돌리고 끝난다 (Q-37: 기동 때 자동 실행하지 않음)
   migrate:
     profiles: [app]
     build: .
