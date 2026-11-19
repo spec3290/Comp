@@ -420,10 +420,11 @@ class ContestRepository:
         now: datetime,
         saved: str,
     ) -> None:
-        """중복 문서를 지우고 합친 출처를 base 에 쓴다. 중간에 경합하면 지운 문서를 되살린다.
+        """중복 문서를 지우고 합친 출처를 base 에 쓴다. 중간에 실패하면 지운 문서를 되살린다.
 
         출처 UNIQUE 인덱스 때문에 base 를 먼저 쓸 수 없다. CI·Atlas 무료 등급의 단일 노드에서도
-        돌도록 트랜잭션 대신 보상 처리로 원래 문서(같은 _id)를 복원한다.
+        돌도록 트랜잭션 대신 보상 처리로 원래 문서(같은 _id)를 복원한다. 경합(_Conflict)뿐 아니라
+        쓰기 오류·연결 오류에서도 복원해야 출처를 잃지 않는다. 원래 예외는 그대로 다시 던진다.
         """
         deleted: list[Document] = []
         try:
@@ -434,7 +435,7 @@ class ContestRepository:
                     raise _Conflict
                 deleted.append(doc)
             self._write(base, sources, now, saved=saved)
-        except _Conflict:
+        except Exception:
             for doc in deleted:
                 # 그 사이 같은 출처가 다른 문서에 들어갔으면 복원하지 않는다 (다음 수집이 채운다)
                 with suppress(DuplicateKeyError):
