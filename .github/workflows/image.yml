@@ -1,0 +1,64 @@
+name: image
+
+# 배포 이미지를 빌드해 Docker Hub 에 올린다 (docs/decisions.md Q-37).
+# 저장소 Settings > Secrets and variables > Actions 에 다음을 넣어야 한다.
+#   Variables: DOCKERHUB_USERNAME (Docker Hub 아이디. 이미지 이름은 {아이디}/comp)
+#   Secrets:   DOCKERHUB_TOKEN    (Docker Hub > Account settings > Personal access tokens, Read & Write)
+# 태그 규칙:
+#   develop 에 push  → develop, sha-<7자리>
+#   v1.2.3 태그 push → 1.2.3, 1.2, latest  (git-workflow 스킬의 릴리즈 태그)
+# 이미지가 정상 동작하는지는 PR 에서 ci.yml 의 image 잡이 먼저 확인한다.
+on:
+  push:
+    branches: [develop]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: build & push to Docker Hub
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/comp
+    steps:
+      # 설정이 빠졌을 때 로그인 단계의 알기 어려운 오류 대신 무엇을 넣어야 하는지 알려 준다
+      - name: Docker Hub 설정 확인
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          [ -n "$DOCKERHUB_USERNAME" ] || { echo "::error::Variables 에 DOCKERHUB_USERNAME 이 없다"; exit 1; }
+          [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::Secrets 에 DOCKERHUB_TOKEN 이 없다"; exit 1; }
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 태그 계산
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          flavor: |
+            latest=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
