@@ -515,9 +515,9 @@ def test_merge_failing_with_other_error_restores_absorbed_document(
 ) -> None:
     """합친 문서를 쓰다 경합 외 오류가 나도 지운 중복 문서를 되살리고 원래 오류를 던진다."""
     mongo_db[COLLECTION].insert_many([_legacy_doc("dev_event", []), _legacy_doc("code4korea", [])])
-    before = sorted(mongo_db[COLLECTION].find(), key=lambda d: d["_id"])
     repo = _BrokenWriteRepository(mongo_db)
-    repo.ensure_indexes()
+    repo.ensure_indexes()  # 이전 구조 문서를 옮긴 뒤의 모습을 기준으로 비교한다
+    before = sorted(mongo_db[COLLECTION].find(), key=lambda d: d["_id"])
 
     with pytest.raises(AutoReconnect):
         _save(repo, _contest("dev_event"))
