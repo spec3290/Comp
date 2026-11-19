@@ -1,0 +1,24 @@
+# 이미지에는 Dockerfile 이 COPY 하는 것(app, migrations, alembic.ini, pyproject.toml, uv.lock)만 필요하다.
+# 비밀 값(.env)이 빌드 컨텍스트로 새지 않게 하는 것이 가장 중요하다.
+.env
+.env.*
+.git
+.github
+.claude
+.venv
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.import_linter_cache
+.coverage
+*.egg-info
+*.db
+tests
+docs
+st
+scripts
+docker-compose.yml
+Dockerfile
+.dockerignore

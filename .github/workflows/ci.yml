@@ -43,6 +43,29 @@ jobs:
           MONGODB_TEST_URI: mongodb://localhost:27017
         run: uv run pytest --cov=app --cov-report=term-missing:skip-covered
 
+  image:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 이미지 빌드
+        run: docker build -t comp:ci .
+      # 기동 시 JWT_SECRET 만 검증하고 DB·Redis 는 첫 요청 때 붙으므로 비밀 값 없이 /health 를 확인한다
+      - name: 컨테이너 기동과 /health 확인
+        run: |
+          docker run -d --name comp -p 8000:8000 \
+            -e JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" comp:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health && exit 0
+            sleep 1
+          done
+          docker logs comp
+          exit 1
+      - name: 같은 이미지로 마이그레이션·수집 명령을 찾을 수 있는지 확인
+        run: |
+          docker run --rm comp:ci alembic --help > /dev/null
+          docker run --rm comp:ci python -c "import app.contests.collect"
+
   conventions:
     name: git conventions
     if: github.event_name == 'pull_request'
