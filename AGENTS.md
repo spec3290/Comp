@@ -39,6 +39,7 @@ app/
   core/              # config, time(KST), db(MongoDB), sql(PostgreSQL), kv(Redis), errors 등 기능 공통
   contests/          # router.py → service.py → repository.py, models.py, rules.py, crawlers/
   auth/              # router.py → service.py → repository.py, models.py, oauth.py
+  notifications/     # router.py → service.py → repository.py, models.py, rules.py, dispatch.py(CLI)
 migrations/          # Alembic (PostgreSQL 스키마)
 ```
 
@@ -50,7 +51,7 @@ migrations/          # Alembic (PostgreSQL 스키마)
 |---|---|
 | AC-1 | `app.*.rules`는 `sqlalchemy`, `pymongo`, `redis`, `fastapi`, `starlette`, `httpx`, `jwt`를 import하지 않는다 |
 | AC-2 | `app.*.router`는 `app.*.repository`를 직접 import하지 않는다 (service 경유) |
-| AC-3 | `app.core`는 기능 패키지(`app.contests`, `app.auth`)를 import하지 않는다 |
+| AC-3 | `app.core`는 기능 패키지(`app.contests`, `app.auth`, `app.notifications`)를 import하지 않는다 |
 
 위반은 import를 지우거나 우회하지 말고 로직을 올바른 계층으로 옮겨 해결한다.
 코드 규칙은 ruff와 mypy가 강제한다: 타입 주석 필수(strict), naive `datetime` 금지, `print` 금지, `requests` 금지(httpx만), 함수 복잡도 10 이하.

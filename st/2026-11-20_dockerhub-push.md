@@ -3,14 +3,14 @@
 - 날짜: 2026-11-20
 - 브랜치: `feature/64_dockerhub-push` (이슈 #64, `feature/62_docker-image` 위에 쌓음)
 - 기능: 없음 (프로젝트 설정)
-- 결정: Q-36 갱신 — 레지스트리는 Docker Hub(사용자 결정), 배포 대상은 열림
+- 결정: Q-37 갱신(develop 의 알림 Q-36 과 겹쳐 Q-36 → Q-37로 바꿈) — 레지스트리는 Docker Hub(사용자 결정), 배포 대상은 열림
 
 ## 배경
 사용자 결정: 이미지 레지스트리로 Docker Hub를 쓴다. 이미지(#62, PR #63)를 CI가 자동으로 빌드해 올리게 한다.
 
 ## 바뀐 것
 - `.github/workflows/image.yml` 추가: develop push와 `v*` 태그 push(그리고 수동 실행) 때 빌드해 `{DOCKERHUB_USERNAME}/comp`로 push한다. 태그는 `develop`·`sha-<7자리>`, 릴리즈는 `1.2.3`·`1.2`·`latest`(docker/metadata-action). 빌드 캐시는 GitHub Actions 캐시를 쓴다. 설정이 비어 있으면 첫 단계에서 무엇이 빠졌는지 알려 주고 실패한다.
-- `docs/decisions.md` Q-36: 레지스트리 결정 내용과 태그 규칙.
+- `docs/decisions.md` Q-37: 레지스트리 결정 내용과 태그 규칙.
 - `README.md`: Docker Hub 이미지 이름, 태그 규칙, 필요한 Secrets/Variables.
 
 ## 리뷰 결과: approve

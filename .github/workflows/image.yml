@@ -1,6 +1,6 @@
 name: image
 
-# 배포 이미지를 빌드해 Docker Hub 에 올린다 (docs/decisions.md Q-36).
+# 배포 이미지를 빌드해 Docker Hub 에 올린다 (docs/decisions.md Q-37).
 # 저장소 Settings > Secrets and variables > Actions 에 다음을 넣어야 한다.
 #   Variables: DOCKERHUB_USERNAME (Docker Hub 아이디. 이미지 이름은 {아이디}/comp)
 #   Secrets:   DOCKERHUB_TOKEN    (Docker Hub > Account settings > Personal access tokens, Read & Write)
