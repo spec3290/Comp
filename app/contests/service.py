@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 from app.contests.crawlers.base import ContestSource, RawContest
 from app.contests.repository import (
     BookmarkRepository,
-    ClickRepository,
     ContestRecord,
     ContestRepository,
     SaveOutcome,
@@ -45,7 +44,7 @@ from app.contests.rules import (
     split_source_tags,
 )
 from app.core.db import get_database
-from app.core.errors import ApplyUrlMissingError, ContestClosedError, NotFoundError
+from app.core.errors import ContestClosedError, NotFoundError
 from app.core.sql import get_session
 from app.core.time import now_kst
 
@@ -191,34 +190,6 @@ class ContestQueryService:
 def get_query_service() -> ContestQueryService:
     """요청마다 조회 서비스를 조립한다."""
     return ContestQueryService(ContestRepository(get_database()))
-
-
-class ApplyService:
-    """참가 바로가기 유스케이스 (F2-5)."""
-
-    def __init__(self, clicks: ClickRepository, contests: ContestRepository) -> None:
-        """클릭·대회 저장소를 받는다."""
-        self._clicks = clicks
-        self._contests = contests
-
-    def click(self, contest_id: str, user_id: int | None, today: date, now: datetime) -> str:
-        """클릭을 남기고 공식 참가 URL 을 돌려준다. 없으면 404, 마감·링크 없음은 409."""
-        record = self._contests.get(contest_id)
-        if record is None:
-            raise NotFoundError("대회를 찾을 수 없습니다.")
-        if _view(record, today).status is ContestStatus.CLOSED:
-            raise ContestClosedError("접수가 마감된 대회입니다.")
-        if record.apply_url is None:
-            raise ApplyUrlMissingError(
-                "참가 링크를 찾지 못했습니다. 대회 이름으로 직접 검색해 주세요."
-            )
-        self._clicks.add(contest_id, user_id, now)
-        return record.apply_url
-
-
-def get_apply_service(session: Annotated[Session, Depends(get_session)]) -> ApplyService:
-    """요청마다 바로가기 서비스를 조립한다."""
-    return ApplyService(ClickRepository(session), ContestRepository(get_database()))
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.contests.models import Bookmark, ContestClick
+from app.contests.models import Bookmark
 from app.contests.rules import (
     NO_TAGS,
     OPEN_ENDED,
@@ -581,15 +581,3 @@ class BookmarkRepository:
         """회원이 이 대회를 저장했는지 본다."""
         return self._session.get(Bookmark, (user_id, contest_id)) is not None
 
-
-class ClickRepository:
-    """PostgreSQL 참가 바로가기 클릭 저장소 (F2-5). 클릭 수는 행을 세어 집계한다."""
-
-    def __init__(self, session: Session) -> None:
-        """요청 단위 세션을 받는다."""
-        self._session = session
-
-    def add(self, contest_id: str, user_id: int | None, now: datetime) -> None:
-        """클릭 한 건을 남긴다. 같은 회원이 여러 번 눌러도 매번 센다."""
-        self._session.add(ContestClick(contest_id=contest_id, user_id=user_id, clicked_at=now))
-        self._session.commit()
