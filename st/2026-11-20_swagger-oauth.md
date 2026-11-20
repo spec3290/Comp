@@ -32,3 +32,12 @@
 | `uv run lint-imports` | Contracts: 3 kept, 0 broken |
 | `uv run pytest` | 351 passed, 36 skipped (MONGODB_TEST_URI 미설정 등) |
 | `SWAGGER_OAUTH_ENABLED=true ... create_app()` 의 `/openapi.json` | `googleOAuth2` 스킴(authorizationUrl `/auth/google/login`, tokenUrl `/auth/swagger/token`), `/users/me` security 에 `HTTPBearer` 와 `googleOAuth2`, `/docs` 에 `clientId` 초기값 |
+
+## CI (PR #73)
+
+| 검사 | 결과 |
+|---|---|
+| lint / type / architecture / test | pass |
+| docker image | pass |
+| git conventions | pass |
+| CodeRabbit | pass (지적 없음) |
