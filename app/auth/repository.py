@@ -76,8 +76,6 @@ class UserRepository:
         self,
         user: User,
         nickname: str,
-        grade: int | None,
-        school_type: str,
         fields: list[str],
     ) -> None:
         """프로필을 통째로 바꾼다. 관심 분야는 바뀐 것만 지우고 더한다.
@@ -85,7 +83,7 @@ class UserRepository:
         확인과 저장 사이에 다른 회원이 같은 닉네임을 먼저 저장하면 UNIQUE 제약에 걸려
         NicknameConflictError 가 난다.
         """
-        user.nickname, user.grade, user.school_type = nickname, grade, school_type
+        user.nickname = nickname
         wanted = set(fields)
         for interest in [i for i in user.interests if i.field not in wanted]:
             user.interests.remove(interest)

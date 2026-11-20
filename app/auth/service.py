@@ -269,8 +269,6 @@ class UserService:
             self._users.update_profile(
                 user,
                 nickname=profile.nickname,
-                grade=profile.grade,
-                school_type=profile.school_type.value,
                 fields=[f.value for f in ordered_fields(profile.interest_fields)],
             )
         except NicknameConflictError as exc:

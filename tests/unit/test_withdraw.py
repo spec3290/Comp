@@ -29,7 +29,7 @@ from tests.unit.auth_support import (
     user_count,
 )
 
-PROFILE = {"nickname": "탈퇴할회원", "school_type": "대학교", "interest_fields": ["AI"]}
+PROFILE = {"nickname": "탈퇴할회원", "interest_fields": ["AI"]}
 
 
 def _start(client: TestClient, access: object) -> str:

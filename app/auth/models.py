@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, SmallInteger, String, UniqueConstraint
+from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.sql import AwareDateTime, Base
@@ -25,8 +25,6 @@ class User(Base):
     # 프로필(F1-7, 값 규칙은 rules.py). 온보딩 전에는 NULL 이고 nickname 으로 온보딩
     # 여부를 판단한다.
     nickname: Mapped[str | None] = mapped_column(String(50))
-    grade: Mapped[int | None] = mapped_column(SmallInteger)
-    school_type: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(AwareDateTime())  # UTC 저장, KST 로 읽음
     interests: Mapped[list[UserInterestField]] = relationship(
         cascade="all, delete-orphan", lazy="selectin", passive_deletes=True
