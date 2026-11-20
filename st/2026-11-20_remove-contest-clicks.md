@@ -38,8 +38,8 @@
 |---|---|
 | `python3 -m py_compile` (바뀐 파일) | 통과. 로컬에 `uv`가 없어 나머지는 CI에서 확인 |
 | CI 1차 | `ruff format --check` 실패: 클래스를 지운 뒤 `models.py`·`repository.py` 끝에 빈 줄이 남음. 지우고 다시 올림 |
-| `uv run ruff format --check .` / `uv run ruff check .` | CI에서 확인 |
-| `uv run mypy` | CI에서 확인 |
-| `uv run lint-imports` | CI에서 확인 |
-| `uv run pytest` | CI에서 확인 |
-| `python scripts/check_conventions.py` | CI에서 확인 |
+| `uv run ruff format --check .` / `uv run ruff check .` | CI 2차 통과 |
+| `uv run mypy` | CI 2차 통과 |
+| `uv run lint-imports` | CI 2차 통과 |
+| `uv run pytest` | CI 2차 통과 |
+| `python scripts/check_conventions.py` | CI 2차 통과 |
