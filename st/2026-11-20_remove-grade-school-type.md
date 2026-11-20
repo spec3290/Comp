@@ -22,7 +22,9 @@
 - 없음
 
 ### 권장
-- API 응답에서 필드가 빠지므로 프론트가 `grade`·`school_type`을 읽거나 온보딩 폼에 두고 있다면 같이 지워야 한다. 요청 쪽은 무시되므로 배포 순서는 상관없다.
+- 배포 순서(CodeRabbit 지적 반영): **새 API → `0006` → 새 프론트**.
+  - 새 API 먼저: 예전 API의 `ProfileIn`은 `school_type`이 필수라 새 프론트가 먼저 나가면 프로필 저장이 400이 된다. 새 API는 예전 프론트의 두 필드를 무시하므로 반대 순서만 안전하다.
+  - `0006`은 예전 API 인스턴스가 모두 내려간 뒤: 예전 `User` 매핑은 지운 컬럼을 SELECT 하므로, Q-37의 "마이그레이션을 API보다 먼저" 순서를 이번에는 뒤집는다(컬럼 삭제는 코드가 먼저). 새 API는 컬럼이 남아 있어도 읽지 않으므로 `0006` 전에 떠도 된다.
 - 운영 DB에서 `0006`을 돌리면 기존 값은 사라진다. 되돌릴 일이 있으면 배포 전에 백업을 떠 둔다.
 
 ### 확인한 것
@@ -38,8 +40,9 @@
 | 검사 | 결과 |
 |---|---|
 | `python3 -m py_compile` (바뀐 파일) | 통과. 로컬에 `uv`가 없어 나머지는 CI에서 확인 |
-| `uv run ruff format --check .` / `uv run ruff check .` | CI에서 확인 |
-| `uv run mypy` | CI에서 확인 |
-| `uv run lint-imports` | CI에서 확인 |
-| `uv run pytest` | CI에서 확인 |
-| `python scripts/check_conventions.py` | CI에서 확인 |
+| `uv run ruff format --check .` / `uv run ruff check .` | CI 통과 |
+| `uv run mypy` | CI 통과 |
+| `uv run lint-imports` | CI 통과 |
+| `uv run pytest` | CI 통과 |
+| `python scripts/check_conventions.py` | CI 통과 |
+| docker image | CI 통과 |
