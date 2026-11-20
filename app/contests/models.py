@@ -24,4 +24,3 @@ class Bookmark(Base):
     )
     contest_id: Mapped[str] = mapped_column(String(24), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime())
-

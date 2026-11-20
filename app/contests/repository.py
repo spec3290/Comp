@@ -580,4 +580,3 @@ class BookmarkRepository:
     def exists(self, user_id: int, contest_id: str) -> bool:
         """회원이 이 대회를 저장했는지 본다."""
         return self._session.get(Bookmark, (user_id, contest_id)) is not None
-
