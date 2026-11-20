@@ -101,12 +101,6 @@ class ContestDetailOut(ContestSummaryOut):
         )
 
 
-class ApplyLinkOut(BaseModel):
-    """참가 바로가기 응답 (F2-5). 프론트가 이 주소를 새 창으로 연다."""
-
-    apply_url: str
-
-
 class ContestPageOut(BaseModel):
     """대회 목록 페이지 응답."""
 
