@@ -2,14 +2,15 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth.router import add_swagger_oauth, users_router
 from app.auth.router import router as auth_router
-from app.auth.router import users_router
-from app.auth.service import close_http_client, get_token_issuer
+from app.auth.service import close_http_client, get_token_issuer, swagger_oauth_providers
 from app.contests.router import me_router as my_contests_router
 from app.contests.router import router as contests_router
 from app.core.db import close_client, get_settings
@@ -44,7 +45,12 @@ def _frontend_origin() -> str:
 
 def create_app() -> FastAPI:
     """CORS·로그 가림·에러 핸들러·라우터를 붙인 앱을 만든다."""
-    application = FastAPI(title="Contest Collector", lifespan=lifespan)
+    application = FastAPI(
+        title="Contest Collector",
+        lifespan=lifespan,
+        # Swagger Authorize 창의 client_id 칸. 서버는 값을 보지 않는다 (Q-40)
+        swagger_ui_init_oauth={"clientId": "swagger"},
+    )
     # 토큰은 쿠키가 아니라 Authorization 헤더로 오가므로 credentials 는 허용하지 않는다
     application.add_middleware(
         CORSMiddleware,
@@ -60,7 +66,23 @@ def create_app() -> FastAPI:
     application.include_router(contests_router)
     application.include_router(my_contests_router)
     application.include_router(notifications_router)
+    _install_swagger_oauth(application)
     return application
+
+
+def _install_swagger_oauth(application: FastAPI) -> None:
+    """SWAGGER_OAUTH_ENABLED 면 /docs 의 Authorize 창에 소셜 로그인을 띄운다 (Q-40)."""
+    build_schema = application.openapi
+
+    def openapi() -> dict[str, Any]:
+        """처음 한 번 만든 스키마에 OAuth2 스킴을 더해 캐시한다."""
+        if application.openapi_schema is None:
+            application.openapi_schema = add_swagger_oauth(
+                build_schema(), swagger_oauth_providers()
+            )
+        return application.openapi_schema
+
+    application.openapi = openapi  # type: ignore[method-assign]
 
 
 app = create_app()
