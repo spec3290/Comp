@@ -121,9 +121,7 @@ def _member(
     """관심 분야를 정한 회원을 만들고 그 회원의 Authorization 헤더를 돌려준다."""
     users = UserRepository(session)
     user, _ = users.get_or_create("google", provider_id, NOW)
-    users.update_profile(
-        user, nickname=f"회원{provider_id}", grade=None, school_type="대학교", fields=fields
-    )
+    users.update_profile(user, nickname=f"회원{provider_id}", fields=fields)
     return bearer(issuer.issue(user.id, now_kst()).access_token)  # 만료 검사는 실제 시각 기준
 
 

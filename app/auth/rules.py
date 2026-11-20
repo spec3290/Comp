@@ -1,6 +1,7 @@
 """프로필 규칙 (F1-7, Q-5). 프레임워크·DB 를 모르는 순수 규칙이다 (AC-1).
 
-학교 유형·관심 분야 어휘는 자격 태그(F3-1)와 맞춤 추천(F3-4)이 같은 값을 쓰도록 여기 한 곳에 둔다.
+관심 분야 어휘는 분야 태그(F3-1)·필터(F3-3)·맞춤 추천(F3-4)이 같은 값을 쓰도록 여기 한 곳에 둔다.
+학년·학교 유형은 맞출 대회 값이 없어 받지 않는다 (Q-38).
 """
 
 from __future__ import annotations
@@ -11,17 +12,6 @@ from enum import StrEnum
 
 NICKNAME_MIN_LENGTH = 2
 NICKNAME_MAX_LENGTH = 12
-GRADE_MIN = 1
-GRADE_MAX = 6
-
-
-class SchoolType(StrEnum):
-    """학교 구분."""
-
-    MIDDLE = "중학교"
-    HIGH = "고등학교"
-    UNIVERSITY = "대학교"
-    OTHER = "기타"
 
 
 class InterestField(StrEnum):
@@ -54,6 +44,4 @@ class ProfileInput:
     """검증을 마친 프로필 입력값."""
 
     nickname: str  # normalize_nickname 을 거친 값
-    grade: int | None
-    school_type: SchoolType
     interest_fields: frozenset[InterestField]
