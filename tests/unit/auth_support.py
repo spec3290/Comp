@@ -20,6 +20,8 @@ REFRESH_TTL = timedelta(days=14)
 CODES = {"code-a": "google-sub-a", "code-b": "google-sub-b"}
 OUTAGE_CODE = "outage"  # FakeProvider 가 제공자 장애로 응답하는 코드
 FRONTEND_URL = "http://frontend.test/auth/callback"
+FRONTEND_ORIGIN = "http://frontend.test"  # 브라우저가 프론트에서 보낸 요청의 Origin
+REFRESH_COOKIE = "refresh_token"
 WITHDRAW_FRONTEND_URL = "http://frontend.test/withdraw/callback"
 
 
@@ -104,12 +106,31 @@ def frontend_params(response: HttpResponse) -> dict[str, str]:
 
 
 def login(client: TestClient, code: str = "code-a") -> dict[str, object]:
-    """콜백 → 프론트가 login_code 를 교환하기까지. 교환 응답 본문을 돌려준다."""
+    """콜백 → login_code 교환까지. 본문에 쿠키로 받은 refresh_token 을 더해 돌려준다."""
     login_code = frontend_params(callback(client, code))["login_code"]
     response = client.post("/auth/token", json={"login_code": login_code})
     assert response.status_code == 200, response.text
     body: dict[str, object] = response.json()
+    assert "refresh_token" not in body  # Refresh 는 쿠키로만 내린다 (Q-41)
+    body["refresh_token"] = response.cookies[REFRESH_COOKIE]
     return body
+
+
+def refresh(
+    client: TestClient, token: object | None, origin: str | None = FRONTEND_ORIGIN
+) -> tuple[int, dict[str, object]]:
+    """프론트처럼 Refresh 쿠키와 Origin 을 실어 재발급한다. 성공하면 새 쿠키 값을 본문에 더한다."""
+    client.cookies.clear()  # 앞서 받은 쿠키 대신 고른 토큰만 보낸다
+    if token is not None:
+        assert isinstance(token, str)
+        client.cookies.set(REFRESH_COOKIE, token)
+    headers = {} if origin is None else {"Origin": origin}
+    response = client.post("/auth/refresh", headers=headers)
+    body: dict[str, object] = response.json()
+    if response.status_code == 200:
+        assert "refresh_token" not in body
+        body["refresh_token"] = response.cookies[REFRESH_COOKIE]
+    return response.status_code, body
 
 
 def claims(token: object) -> dict[str, object]:

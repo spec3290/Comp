@@ -6,6 +6,7 @@
 콜백은 토큰 대신 일회용 로그인 코드를 붙여 브라우저를 프론트로 보내고, 프론트가 그 코드를
 `POST /auth/token` 으로 교환해 토큰을 받는다. URL·브라우저 기록에 토큰이 남지 않는다 (Q-16).
 재발급은 Refresh 를 회전하고 같은 family 로 새 토큰 쌍을 발급한다 (ADR-0002).
+Refresh 는 HttpOnly 쿠키로만 오가고, 쿠키로 오는 재발급은 프론트 출처의 요청만 받는다 (Q-41).
 탈퇴는 제공자 재인증으로 받은 토큰으로 연결을 해제(revoke)한 뒤 회원을 지운다. 해제가
 실패하면 아무것도 지우지 않는다 (Q-7, Q-25).
 """
@@ -94,6 +95,13 @@ class SwaggerOAuthError(AppError):
     code = "SWAGGER_OAUTH_INVALID"
 
 
+class OriginForbiddenError(AppError):
+    """쿠키로 오는 재발급 요청의 Origin 이 프론트 출처가 아닐 때 (403, Q-41 CSRF 방어)."""
+
+    status_code = 403
+    code = "ORIGIN_FORBIDDEN"
+
+
 class NicknameTakenError(AppError):
     """다른 회원이 쓰는 닉네임일 때 (409)."""
 
@@ -143,6 +151,7 @@ class AuthService:
         self._login_codes = login_codes
         self._withdraw_states = withdraw_states
         self._frontend_url = frontend_url
+        self._frontend_origin = _origin(frontend_url)
         self._withdraw_frontend_url = withdraw_frontend_url
         self._swagger_redirect_url = swagger_redirect_url
 
@@ -231,8 +240,21 @@ class AuthService:
         tokens = self._issuer.issue(user.id, now_kst())
         return LoginResult(tokens=tokens, needs_onboarding=user.needs_onboarding)
 
-    def refresh(self, refresh_token: str) -> IssuedTokens:
-        """Refresh Token 을 회전하고 새 토큰 쌍을 발급한다."""
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        """Refresh 쿠키에 Secure 를 붙일지. https 프론트는 https API 만 부르므로 프론트를 따른다."""
+        return self._frontend_url.startswith("https://")
+
+    def refresh(self, refresh_token: str | None, origin: str | None) -> IssuedTokens:
+        """쿠키로 받은 Refresh Token 을 회전하고 새 토큰 쌍을 발급한다.
+
+        쿠키는 다른 사이트의 요청에도 실릴 수 있어 Origin 이 프론트 출처일 때만 받는다 (Q-41).
+        Origin 이 없거나 다르면 403 `ORIGIN_FORBIDDEN`, 쿠키가 없으면 401 `TOKEN_INVALID`.
+        """
+        if origin is None or origin != self._frontend_origin:
+            raise OriginForbiddenError("허용하지 않은 출처의 요청입니다.")
+        if not refresh_token:
+            raise TokenInvalidError("유효하지 않은 토큰입니다.")
         record = self._issuer.rotate(refresh_token)
         if self._users.get(record.user_id) is None:
             raise TokenInvalidError("유효하지 않은 토큰입니다.")  # 탈퇴한 회원 (F1-8)
@@ -323,6 +345,12 @@ def swagger_oauth_providers() -> list[str]:
     if swagger_redirect_url(settings) is None:
         return []
     return sorted(build_providers(settings, get_http_client()))
+
+
+def _origin(url: str) -> str:
+    """주소의 출처(scheme://host:port). 브라우저가 Origin 헤더에 싣는 형태다."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _with_query(url: str, **params: str) -> str:

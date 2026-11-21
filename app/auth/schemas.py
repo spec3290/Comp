@@ -19,10 +19,9 @@ from app.auth.tokens import IssuedTokens
 
 
 class TokenOut(BaseModel):
-    """토큰 발급 응답."""
+    """토큰 발급 응답. Refresh 는 본문에 싣지 않고 HttpOnly 쿠키로 내린다 (Q-41)."""
 
     access_token: str
-    refresh_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105  토큰 종류 이름
     expires_in: int  # Access Token 만료까지 남은 초
 
@@ -31,7 +30,6 @@ class TokenOut(BaseModel):
         """발급한 토큰으로 응답을 만든다."""
         return cls(
             access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
             expires_in=tokens.access_expires_in,
         )
 
@@ -52,12 +50,6 @@ class LoginCodeIn(BaseModel):
     """일회용 로그인 코드 교환 요청."""
 
     login_code: str = Field(min_length=1, max_length=128, description="콜백이 프론트로 넘긴 값")
-
-
-class RefreshIn(BaseModel):
-    """토큰 재발급 요청."""
-
-    refresh_token: str = Field(min_length=1, max_length=2048)
 
 
 class ProfileIn(BaseModel):

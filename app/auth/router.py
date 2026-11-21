@@ -5,14 +5,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Cookie, Depends, Form, Query, Response
+from fastapi import APIRouter, Cookie, Depends, Form, Header, Query, Response
 from fastapi.responses import RedirectResponse
 
 from app.auth.schemas import (
     LoginCodeIn,
     LoginOut,
     ProfileIn,
-    RefreshIn,
     TokenOut,
     UserOut,
     WithdrawalOut,
@@ -26,6 +25,7 @@ from app.auth.service import (
     get_auth_service,
     get_user_service,
 )
+from app.auth.tokens import IssuedTokens
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 users_router = APIRouter(prefix="/users", tags=["users"])
@@ -35,6 +35,8 @@ STATE_COOKIE_MAX_AGE = 600  # 동의 화면에서 머무를 수 있는 시간(�
 # Swagger Authorize 로 시작한 로그인의 Swagger state (Q-40)
 SWAGGER_STATE_COOKIE = "oauth_swagger_state"
 SWAGGER_TOKEN_PATH = "/auth/swagger/token"  # noqa: S105  엔드포인트 주소
+# Refresh Token 을 담는 HttpOnly 쿠키. 재발급·로그아웃(/auth/*)에만 실린다 (Q-41)
+REFRESH_COOKIE = "refresh_token"
 
 Service = Annotated[AuthService, Depends(get_auth_service)]
 Users = Annotated[UserService, Depends(get_user_service)]
@@ -130,6 +132,7 @@ def exchange_login_code(body: LoginCodeIn, response: Response, service: Service)
     """
     result = service.exchange_login_code(body.login_code)
     response.headers["Cache-Control"] = "no-store"  # 본문에 토큰이 있어 캐시하지 않는다
+    _set_refresh_cookie(response, result.tokens, secure=service.refresh_cookie_secure)
     return LoginOut.from_result(result)
 
 
@@ -152,10 +155,19 @@ def exchange_swagger_code(
 
 
 @router.post("/refresh", response_model=TokenOut)
-def refresh(body: RefreshIn, response: Response, service: Service) -> TokenOut:
-    """Refresh 로 새 토큰 쌍을 받는다. 보낸 Refresh 는 더 이상 쓸 수 없다 (회전)."""
-    tokens = service.refresh(body.refresh_token)
+def refresh(
+    response: Response,
+    service: Service,
+    refresh_token: Annotated[str | None, Cookie()] = None,
+    origin: Annotated[str | None, Header()] = None,
+) -> TokenOut:
+    """`refresh_token` 쿠키로 새 Access 와 회전한 Refresh 쿠키를 받는다 (Q-41).
+
+    보낸 Refresh 는 더 이상 쓸 수 없다. Origin 이 프론트 출처가 아니면 403 `ORIGIN_FORBIDDEN`.
+    """
+    tokens = service.refresh(refresh_token, origin)
     response.headers["Cache-Control"] = "no-store"
+    _set_refresh_cookie(response, tokens, secure=service.refresh_cookie_secure)
     return TokenOut.from_tokens(tokens)
 
 
@@ -163,7 +175,22 @@ def refresh(body: RefreshIn, response: Response, service: Service) -> TokenOut:
 def logout(token: CurrentToken, service: Service) -> Response:
     """이 기기의 로그인을 끝낸다. 다른 기기의 로그인은 유지된다."""
     service.logout(token)
-    return Response(status_code=204)
+    response = Response(status_code=204)
+    response.delete_cookie(REFRESH_COOKIE, path="/auth")  # 폐기한 Refresh 를 브라우저에서도 지운다
+    return response
+
+
+def _set_refresh_cookie(response: Response, tokens: IssuedTokens, *, secure: bool) -> None:
+    """Refresh 를 JS 가 읽을 수 없는 쿠키로 심는다. 만료는 Refresh 와 같다 (Q-41)."""
+    response.set_cookie(
+        REFRESH_COOKIE,
+        tokens.refresh_token,
+        max_age=tokens.refresh_expires_in,
+        path="/auth",
+        httponly=True,
+        secure=secure,
+        samesite="lax",  # 다른 사이트에서 보낸 POST 에는 실리지 않는다
+    )
 
 
 @users_router.get("/me", response_model=UserOut)

@@ -51,10 +51,11 @@ def create_app() -> FastAPI:
         # Swagger Authorize 창의 client_id 칸. 서버는 값을 보지 않는다 (Q-40)
         swagger_ui_init_oauth={"clientId": "swagger"},
     )
-    # 토큰은 쿠키가 아니라 Authorization 헤더로 오가므로 credentials 는 허용하지 않는다
+    # Refresh 는 HttpOnly 쿠키로 오가므로 프론트 출처 하나에만 credentials 를 허용한다 (Q-41)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[_frontend_origin()],
+        allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )

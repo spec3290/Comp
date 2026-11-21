@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth.repository import TokenStore
 from app.auth.tokens import JWT_ALGORITHM, TokenIssuer
 from app.core.time import now_kst
-from tests.unit.auth_support import ACCESS_TTL, SECRET, bearer, claims, login
+from tests.unit.auth_support import ACCESS_TTL, SECRET, bearer, claims, login, refresh
 
 
 def _logout(client: TestClient, access: object) -> int:
@@ -20,7 +20,7 @@ def _logout(client: TestClient, access: object) -> int:
 
 def _refresh(client: TestClient, token: object) -> int:
     """재발급을 요청하고 상태 코드를 돌려준다."""
-    return client.post("/auth/refresh", json={"refresh_token": token}).status_code
+    return refresh(client, token)[0]
 
 
 @pytest.mark.feature("F1-5")
@@ -57,7 +57,7 @@ def test_refresh_of_logged_out_session_is_rejected(client: TestClient) -> None:
 def test_logout_after_refresh_revokes_latest_refresh(client: TestClient) -> None:
     """재발급 후 로그아웃하면 가장 최근 Refresh Token 도 폐기된다."""
     first = login(client)
-    rotated = client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).json()
+    rotated = refresh(client, first["refresh_token"])[1]
 
     _logout(client, rotated["access_token"])
 
@@ -144,7 +144,7 @@ def test_access_issued_before_refresh_is_rejected_after_logout(
 ) -> None:
     """재발급 전 Access 는 jti 가 달라 블랙리스트에 없지만 같은 세션이라 함께 막힌다."""
     first = login(client)
-    rotated = client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).json()
+    rotated = refresh(client, first["refresh_token"])[1]
 
     _logout(client, rotated["access_token"])
     response = protected.get("/protected", headers=bearer(first["access_token"]))
@@ -159,8 +159,8 @@ def test_access_of_family_revoked_by_reuse_is_rejected(
 ) -> None:
     """Refresh 재사용 탐지로 세션이 폐기되면 그 세션의 Access 도 바로 막힌다."""
     first = login(client)
-    rotated = client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).json()
-    client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]})  # 재사용
+    rotated = refresh(client, first["refresh_token"])[1]
+    refresh(client, first["refresh_token"])  # 재사용
 
     response = protected.get("/protected", headers=bearer(rotated["access_token"]))
 
