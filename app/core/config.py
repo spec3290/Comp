@@ -24,3 +24,5 @@ class Settings(BaseSettings):
     frontend_login_redirect_url: str = "http://localhost:5173/auth/callback"
     # 탈퇴 재인증 콜백이 끝나면 브라우저를 보낼 프론트 주소 (Q-25)
     frontend_withdraw_redirect_url: str = "http://localhost:5173/withdraw/callback"
+    # 켜면 Swagger(/docs) Authorize 창에서 소셜 로그인을 할 수 있다. 테스트 서버에서만 켠다 (Q-40)
+    swagger_oauth_enabled: bool = False
