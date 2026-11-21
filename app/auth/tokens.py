@@ -50,6 +50,7 @@ class IssuedTokens:
     access_token: str
     refresh_token: str
     access_expires_in: int  # 초
+    refresh_expires_in: int  # 초. Refresh 쿠키의 Max-Age (Q-41)
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class TokenIssuer:
             access_token=access,
             refresh_token=refresh,
             access_expires_in=int(self._access_ttl.total_seconds()),
+            refresh_expires_in=int(self._refresh_ttl.total_seconds()),
         )
 
     def verify(self, token: str, expected: TokenType) -> TokenClaims:

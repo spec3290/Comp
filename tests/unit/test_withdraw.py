@@ -26,6 +26,7 @@ from tests.unit.auth_support import (
     bearer,
     claims,
     login,
+    refresh,
     user_count,
 )
 
@@ -121,10 +122,13 @@ def test_tokens_of_every_session_are_rejected_after_withdrawal(
         for response in (
             protected.get("/protected", headers=bearer(tokens["access_token"])),
             client.get("/users/me", headers=bearer(tokens["access_token"])),
-            client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]}),
         ):
             assert response.status_code == 401
             assert response.json()["error"]["code"] == "TOKEN_INVALID"
+        status, body = refresh(client, tokens["refresh_token"])
+        assert status == 401
+        error = body["error"]
+        assert isinstance(error, dict) and error["code"] == "TOKEN_INVALID"
 
 
 @pytest.mark.feature("F1-8")

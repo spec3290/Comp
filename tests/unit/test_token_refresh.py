@@ -17,14 +17,8 @@ from app.auth.tokens import JWT_ALGORITHM, TokenInvalidError, TokenIssuer
 from app.core.config import Settings
 from app.core.time import now_kst
 from app.main import app
-from tests.unit.auth_support import REFRESH_TTL, bearer, claims, login
-
-
-def _refresh(client: TestClient, token: object) -> tuple[int, dict[str, object]]:
-    """재발급을 요청하고 상태 코드와 본문을 돌려준다."""
-    response = client.post("/auth/refresh", json={"refresh_token": token})
-    body: dict[str, object] = response.json()
-    return response.status_code, body
+from tests.unit.auth_support import FRONTEND_ORIGIN, REFRESH_TTL, bearer, claims, login
+from tests.unit.auth_support import refresh as _refresh
 
 
 def _error_code(body: dict[str, object]) -> object:
@@ -165,12 +159,12 @@ def test_refresh_of_deleted_user_returns_token_invalid(
 
 
 @pytest.mark.feature("F1-4")
-def test_refresh_without_token_returns_400(client: TestClient) -> None:
-    """토큰 없이 재발급하면 400 이다."""
-    response = client.post("/auth/refresh", json={})
+def test_refresh_without_cookie_returns_token_invalid(client: TestClient) -> None:
+    """Refresh 쿠키 없이 재발급하면 TOKEN_INVALID 401 이다 (Q-41)."""
+    status, body = _refresh(client, None)
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert status == 401
+    assert _error_code(body) == "TOKEN_INVALID"
 
 
 @pytest.mark.feature("F1-4")
@@ -251,10 +245,11 @@ def test_short_jwt_secret_is_rejected(redis: fakeredis.FakeRedis, secret: str) -
 @pytest.mark.feature("F1-4")
 def test_refresh_response_is_not_cached(client: TestClient) -> None:
     """재발급 응답은 캐시하지 않는다."""
-    token = login(client)["refresh_token"]
+    login(client)  # 받은 Refresh 쿠키가 클라이언트에 남는다
 
-    response = client.post("/auth/refresh", json={"refresh_token": token})
+    response = client.post("/auth/refresh", headers={"Origin": FRONTEND_ORIGIN})
 
+    assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
 
 
