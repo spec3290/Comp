@@ -75,6 +75,21 @@ jobs:
           curl -fsS http://127.0.0.1:8000/health
           docker compose --profile app logs migrate
           docker compose --profile app down -v
+      - name: 배포 스크립트 정적 검사
+        run: shellcheck deploy/deploy.sh
+      # EC2 배포(deploy.yml)가 서버에서 돌리는 deploy.sh 와 운영 compose 를 방금 빌드한 이미지로 그대로 돌려 본다
+      - name: 운영 compose 로 deploy.sh 배포 확인
+        run: |
+          dir="$(mktemp -d)"
+          cp deploy/docker-compose.yml deploy/deploy.sh "$dir/"
+          {
+            echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+            echo "POSTGRES_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          } > "$dir/.env"
+          IMAGE=comp TAG=ci SKIP_PULL=1 bash "$dir/deploy.sh"
+          curl -fsS http://127.0.0.1:8000/health
+          grep -qx 'TAG=ci' "$dir/release.env"
+          docker compose -f "$dir/docker-compose.yml" --env-file "$dir/.env" --env-file "$dir/release.env" down -v
 
   conventions:
     name: git conventions

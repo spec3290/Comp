@@ -1,0 +1,65 @@
+# 로컬 개발용 docker-compose.yml(프로젝트 comp)과 이름이 같으면 서로의 컨테이너를 덮어쓰므로 따로 둔다
+name: comp-prod
+
+# EC2 운영용 (docs/decisions.md Q-37). deploy.yml 이 이 파일과 deploy.sh 를 서버의 ~/comp 에 복사한다.
+# 비밀 값은 서버의 ~/comp/.env 에만 둔다(직접 만든다, README 'EC2 자동 배포'). 이 파일에는 넣지 않는다.
+# IMAGE·TAG 는 deploy.sh 가 넘기고, 마지막으로 배포한 값은 release.env 에 남는다.
+# PostgreSQL·Redis 는 호스트 포트를 열지 않아 compose 네트워크 안의 migrate·api 만 닿는다.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-contest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env 에 POSTGRES_PASSWORD 가 없다}
+      POSTGRES_DB: ${POSTGRES_DB:-contest}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]  # Refresh Token 저장소 (Q-4), 재시작해도 유지
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # 배포마다 API 보다 먼저 한 번 돌고 끝난다. deploy.sh 가 `run` 으로 부르고, 실패하면 API 는 바꾸지 않는다
+  migrate:
+    image: ${IMAGE:?IMAGE 가 없다}:${TAG:?TAG 가 없다}
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment: &app-db
+      # .env 의 DATABASE_URL·REDIS_URL 보다 우선한다. 비밀번호는 URL 에 그대로 들어가므로 URL-safe 문자만 쓴다
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contest}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-contest}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ${IMAGE}:${TAG}
+    env_file: .env
+    environment: *app-db
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
